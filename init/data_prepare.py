@@ -85,7 +85,7 @@ def get_start_to_end_date(n=180):
 
 def fetch_history_stock_data_from_multiple_sources(symbol, period, start_date, end_date, adjust):
     """
-    从多个接口随机获取股票数据。
+    从多个接口随机获取股票数据，并计算振幅。
     随机选择 efinance、akshare 或 baostock 进行数据获取。
     :param symbol: 股票代码
     :param period: 数据周期
@@ -169,7 +169,11 @@ def fetch_history_stock_data_from_multiple_sources(symbol, period, start_date, e
             df = pd.DataFrame(data_list, columns=columns)
             for col in ['开盘', '最高', '最低', '收盘', '成交量', '成交额', '换手率', '涨跌幅']:
                 df[col] = pd.to_numeric(df[col], errors='coerce')
-            print(f"使用 baostock 获取数据 {symbol} {start_date}-{end_date}")
+
+            # 动态计算振幅
+            df['振幅'] = ((df['最高'] - df['最低']) / df['收盘'].shift(1)) * 100
+
+            print(f"使用 baostock 获取数据并计算振幅 {symbol} {start_date}-{end_date}")
             return check_data(df)
         except Exception as e:
             print(f"baostock 获取失败: {e}")
