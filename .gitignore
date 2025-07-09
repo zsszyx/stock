@@ -3,6 +3,9 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# 忽略所有 __pycache__ 文件夹，包括子目录
+**/__pycache__/
+
 # C extensions
 *.so
 
