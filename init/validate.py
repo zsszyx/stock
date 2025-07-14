@@ -9,7 +9,7 @@ def check_data(df: pd.DataFrame):
     第一步：检查是否有某一行或某一列全为空值（包括空字符串、None 和 NaN），如果有则抛出异常。
     第二步：检查是否存在重复行，如果有则抛出异常。
     第三步：检查是否存在无穷大或无穷小值，如果有则抛出异常。
-    如果某一列或某一行部分为空值，则抛出一个 Warning，并附加调用 check_data 的上一级函数的名称以及传入的参数。
+    如果某一列或某一行部分为空值，则打印具体行的内容，并附加调用 check_data 的上一级函数的名称以及传入的参数。
     :param df: 待清洗的金融数据 DataFrame
     :return: 清洗后的 DataFrame
     """
@@ -31,11 +31,13 @@ def check_data(df: pd.DataFrame):
 
     # 检查是否有某一行部分为空值
     if df.isnull().any(axis=1).any():
-        warnings.warn(f"数据中存在某些行部分为空值。调用函数: {caller_name}, 参数: {caller_args}")
-
-    # 检查是否有某一列部分为空值
-    if df.isnull().any(axis=0).any():
-        warnings.warn(f"数据中存在某些列部分为空值。调用函数: {caller_name}, 参数: {caller_args}")
+        rows_with_partial_nulls = df[df.isnull().any(axis=1)]
+        print(f"数据中存在某些行部分为空值，具体内容如下：\n{rows_with_partial_nulls}\n")
+        
+    # # 检查是否有某一列部分为空值
+    # if df.isnull().any(axis=0).any():
+    #     cols_with_partial_nulls = df.loc[:, df.isnull().any(axis=0)]
+    #     print(f"数据中存在某些列部分为空值，具体内容如下：\n{cols_with_partial_nulls}\n")
 
     # 检查是否存在重复行
     if df.duplicated().any():

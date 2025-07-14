@@ -1,7 +1,7 @@
 import pandas as pd
 import warnings
 from init import *
-from init.data_prepare import read_main_board, read_growth_board, get_stock_zh_a_hist, get_start_to_end_date
+from init.data_prepare import read_main_board, read_growth_board, get_stock_zh_a_hist, get_start_to_end_date, get_stock_zh_a_hist_batch
 
 def mark_long_erbo_condition1(df: pd.DataFrame):
     """
@@ -80,7 +80,7 @@ def filter_zhu_erbo_condition0():
             warnings.warn(f"总市值为 None 的元素: 代码={row[0]}, 名称={row[1]}")
         elif int(row[2]) < 100_000_000_000:
             filtered_data.append(row)
-
+    print(f"筛选后的股票数量: {len(filtered_data)}")
     return filtered_data
 
 def mark_zhu_erbo_condition1(df: pd.DataFrame):
@@ -115,13 +115,15 @@ def mark_zhu_erbo_condition1(df: pd.DataFrame):
 def mark_consecutive_small_positive(df: pd.DataFrame):
     """
     寻找连续的缩量小阳线：
-    - 最近 20 天成交量的平均值和标准差。
-    - 成交量小于均值减标准差且涨跌幅大于 0 不超过 3。
+    - 最近 20 天成交量的均值和标准差。
+    - 成交量小于均值减标准差。
+    - 最近 20 天柱体的均值和标准差。
+    - 柱体小于均值减去 1 个标准差且收盘价大于开盘价。
     - 统计符合条件的连续天数，并记录在一列 '连续缩量小阳线' 中。
-    :param df: 包含股票数据的 DataFrame，必须包含 '成交量' 和 '涨跌幅' 列。
+    :param df: 包含股票数据的 DataFrame，必须包含 '开盘'、'收盘'、'最高'、'最低' 和 '成交量' 列。
     :return: 增加标记列的 DataFrame。
     """
-    required_columns = ['成交量', '涨跌幅']
+    required_columns = ['开盘', '收盘', '最高', '最低', '成交量']
     for col in required_columns:
         if col not in df.columns:
             raise ValueError(f"DataFrame 必须包含 '{col}' 列！")
@@ -132,15 +134,26 @@ def mark_consecutive_small_positive(df: pd.DataFrame):
     # 滑动窗口处理
     consecutive_days = 0  # 记录连续天数
     for i in range(len(df)):
-        # 计算最近 20 天的均值和标准差
-        window = df.iloc[max(0, i - 19):i + 1]  # 最近 20 天的窗口
-        volume_mean = window['成交量'].mean()
-        volume_std = window['成交量'].std()
+        # 计算最近 20 天成交量的均值和标准差
+        volume_window = df.iloc[max(0, i - 19):i + 1]  # 最近 20 天的窗口
+        volume_mean = volume_window['成交量'].mean()
+        volume_std = volume_window['成交量'].std()
+
+        # 计算最近 20 天柱体的均值和标准差
+        candle_sizes = volume_window['最高'] - volume_window['最低']  # 计算柱体大小
+        candle_mean = candle_sizes.mean()
+        candle_std = candle_sizes.std()
 
         # 判断当天是否符合条件
-        if df.at[i, '成交量'] < (volume_mean - volume_std) and 0 < df.at[i, '涨跌幅'] <= 3:
+        # 使用 iloc 方法通过整数位置索引获取数据
+        current_candle_size = df.iloc[i]['最高'] - df.iloc[i]['最低']
+        if (
+            df.iloc[i]['成交量'] < (volume_mean - volume_std) and  # 成交量条件
+            current_candle_size < (candle_mean - candle_std) and  # 柱体条件
+            df.iloc[i]['收盘'] > df.iloc[i]['开盘']  # 收盘价大于开盘价
+        ):
             consecutive_days += 1
-            df.at[i, '连续缩量小阳线'] = consecutive_days
+            df.at[df.index[i], '连续缩量小阳线'] = consecutive_days
         else:
             consecutive_days = 0  # 不符合条件时重置连续天数
 
@@ -150,9 +163,9 @@ def erbo_main_query_mode():
     """
     二波主函数-查询模式：
     1. 过滤股票名单
-    2. 查询最近30天历史行情
+    2. 查询最近30天历史行情（批量获取）
     3. 应用所有mark方法
-    4. 统计最新一天命中条件数量，排序打印
+    4. 统计最新一天命中条件数量，按照缩量小阳线天数从多到少排序打印
     """
     # 1. 过滤股票名单
     filtered_stocks = filter_zhu_erbo_condition0()
@@ -160,45 +173,61 @@ def erbo_main_query_mode():
         print("没有符合条件的股票。")
         return
 
-    results = []
+    # 构造参数列表
+    params_list = []
+    start_date, end_date = get_start_to_end_date(32)
     for code, name, _ in filtered_stocks:
-        # 2. 查询最近30天历史行情
-        start_date, end_date = get_start_to_end_date(30)
-        try:
-            df = get_stock_zh_a_hist(symbol=code, start_date=start_date, end_date=end_date)
-        except Exception as e:
-            print(f"{code} {name} 获取行情失败: {e}")
+        params_list.append({
+            "symbol": code,
+            "period": "daily",
+            "start_date": start_date,
+            "end_date": end_date,
+            "adjust": "qfq"  # 可根据需求调整复权方式
+        })
+
+    # 2. 批量查询最近30天历史行情
+    result_data = get_stock_zh_a_hist_batch(params_list)
+
+    results = []
+    for (params, df), (_, name, _) in zip(result_data, filtered_stocks):
+        code = params["symbol"]
+
+        if df.empty:
+            print(f"{code} {name} 获取数据失败，跳过。")
             continue
 
         # 3. 应用所有mark方法
-        try:
-            df = mark_long_erbo_condition1(df)
-            df = mark_short_erbo_condition1(df)
-            df = mark_zhu_erbo_condition1(df)
-            df = mark_consecutive_small_positive(df)
-        except Exception as e:
-            print(f"{code} {name} 计算条件失败: {e}")
-            continue
+        df = mark_long_erbo_condition1(df)
+        df = mark_short_erbo_condition1(df)
+        df = mark_zhu_erbo_condition1(df)
+        df = mark_consecutive_small_positive(df)
 
-        # 4. 统计最新一天命中条件数量
+        # 4. 统计最新一天命中条件数量和具体命中条件
         last = df.iloc[-1]
-        hit_count = int(last.get('长二波条件1', False)) + \
-                    int(last.get('短二波条件1', False)) + \
-                    int(last.get('朱二波条件1', False))
-        small_positive = int(last.get('连续缩量小阳线', 0))
-        if hit_count > 0 and small_positive > 0:
+        small_positive_days = int(last.get('连续缩量小阳线', 0))
+        conditions = []
+        if last.get('长二波条件1', False):
+            conditions.append("长二波条件1")
+        if last.get('短二波条件1', False):
+            conditions.append("短二波条件1")
+        if last.get('朱二波条件1', False):
+            conditions.append("朱二波条件1")
+        if small_positive_days > 0:
+            conditions.append(f"连续缩量小阳线{small_positive_days}天")
+
+        if conditions:
             results.append({
                 "code": code,
                 "name": name,
-                "hit_count": hit_count,
-                "small_positive": small_positive
+                "small_positive_days": small_positive_days,
+                "conditions": conditions
             })
 
-    # 5. 排序并打印
-    results.sort(key=lambda x: (-x['hit_count'], -x['small_positive']))
+    # 5. 按照缩量小阳线天数从多到少排序并打印
+    results.sort(key=lambda x: (-x['small_positive_days'], x['code']))
     print("命中条件数量排序结果：")
     for r in results:
-        print(f"{r['name']}({r['code']}): 命中{r['hit_count']}个条件, 连续缩量小阳线{r['small_positive']}天")
+        print(f"{r['name']}({r['code']}): 连续缩量小阳线{r['small_positive_days']}天, 命中条件: {', '.join(r['conditions'])}")
 
 if __name__ == "__main__":
     erbo_main_query_mode()
