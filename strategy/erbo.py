@@ -419,7 +419,7 @@ def erbo_main_query_mode():
             "长二波条件1": last.get('长二波条件1', False),
             "短二波条件1": last.get('短二波条件1', False),
             "朱二波条件1": last.get('朱二波条件1', False),
-            "命中条件": ", ".join(conditions)
+            "命中条件": ", ".join(conditions),
             "承接+两阳一阴": total_support_count + total_two_positive_one_negative_count
             })
 
