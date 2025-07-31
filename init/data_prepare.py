@@ -103,7 +103,7 @@ def get_start_to_end_date(n=180):
     :param n: 最近天数，默认为 180 天
     :return: 最近 n 天的交易日期范围，格式为 'YYYY-MM-DD'
     '''
-    today = datetime.today().strftime('%Y%m%d')  # 获取今天日期
+    today = (datetime.today() - timedelta(days=0)).strftime('%Y%m%d')  # 获取今天日期
     start_date = (datetime.today() - timedelta(days=n)).strftime('%Y%m%d')  # 获取 n 天前的日期
     return start_date, today
 

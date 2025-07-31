@@ -23,7 +23,7 @@ def trade_date_sample():
     print('login respond  error_msg:'+lg.error_msg)
 
     #### 获取交易日信息 ####
-    rs = bs.query_trade_dates(start_date="2017-01-01", end_date="2025-07-28")
+    rs = bs.query_trade_dates(start_date="2017-01-01", end_date="2025-07-30")
     print('query_trade_dates respond error_code:'+rs.error_code)
     print('query_trade_dates respond  error_msg:'+rs.error_msg)
 
@@ -41,7 +41,7 @@ def trade_date_sample():
     #### 登出系统 ####
     bs.logout()
 
-def download_history_k_data_sample(code, start_date, end_date):
+def download_history_k_data_sample():
     #### 登陆系统 ####
     lg = bs.login()
     # 显示登陆返回信息
@@ -54,7 +54,7 @@ def download_history_k_data_sample(code, start_date, end_date):
     # 周月线指标：date,code,open,high,low,close,volume,amount,adjustflag,turn,pctChg
     rs = bs.query_history_k_data_plus("sh.600000",
         "date,code,open,high,low,close,preclose,volume,amount,adjustflag,turn,tradestatus,pctChg,isST",
-        start_date='2024-07-01', end_date='2024-12-31',
+        start_date='2024-07-01', end_date='2025-07-30',
         frequency="d", adjustflag="3")
     print('query_history_k_data_plus respond error_code:'+rs.error_code)
     print('query_history_k_data_plus respond  error_msg:'+rs.error_msg)
@@ -75,8 +75,9 @@ def download_history_k_data_sample(code, start_date, end_date):
 
 if __name__ == '__main__':
     # 获取指定日期全部股票的日K线数据
-    # download_data_sample("2019-02-25")
-    trade_date_sample()
+    download_data_sample("2019-02-25")
+    # trade_date_sample()
+    # download_history_k_data_sample()
 '''
 参数名称	参数描述	算法说明
 date	交易所行情日期	

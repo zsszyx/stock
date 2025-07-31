@@ -23,11 +23,11 @@ def check_data(df: pd.DataFrame):
 
     # 检查是否有某一行全为空值
     if df.isnull().all(axis=1).any():
-        raise ValueError(f"数据中存在某些行完全为空值，请检查数据！调用函数: {caller_name}, 参数: {caller_args}")
+        raise ValueError(f"数据中存在某些行完全为空值，请检查数据！调用函数: {caller_name}")
 
     # 检查是否有某一列全为空值
     if df.isnull().all(axis=0).any():
-        raise ValueError(f"数据中存在某些列完全为空值，请检查数据！调用函数: {caller_name}, 参数: {caller_args}")
+        raise ValueError(f"数据中存在某些列完全为空值，请检查数据！调用函数: {caller_name}")
 
     # 检查是否有某一行部分为空值
     if df.isnull().any(axis=1).any():

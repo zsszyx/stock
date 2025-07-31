@@ -6,5 +6,7 @@ import efinance as ef
 # 全局反扒 user-agent 设置
 import akshare as ak
 
-print(erbo_main_query_mode())
+from init import initialize_data
+# initialize_data()
+erbo_main_query_mode()
 # stock_zh_a_daily_qfq_dqfq_df)

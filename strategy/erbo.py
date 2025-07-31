@@ -81,6 +81,8 @@ def filter_zhu_erbo_condition0():
             warnings.warn(f"总市值为 None 的元素: 代码={row[0]}, 名称={row[1]}")
         elif int(row[2]) < 100_000_000_000:
             filtered_data.append(row)
+        else:
+            filtered_data.append(row)
     print(f"筛选后的股票数量: {len(filtered_data)}")
     return filtered_data
 
