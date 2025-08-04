@@ -13,7 +13,8 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # 数据库路径
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'stock_data.db')
+DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'stock_data.db')
+# DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'stock_data.db')
 
 # =============== 数据库链接装饰器 =================
 def with_db_connection(func):
@@ -278,4 +279,5 @@ def update_stock_daily_kline(conn, cursor, codes=None, force_update=False):
 if __name__ == "__main__":
     # fetch_stock_list()
     # print(fetch_trade_dates())
-    update_stock_daily_kline()
+    # update_stock_daily_kline()
+    print(DB_PATH)
