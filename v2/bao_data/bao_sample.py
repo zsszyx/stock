@@ -75,9 +75,9 @@ def download_history_k_data_sample():
 
 if __name__ == '__main__':
     # 获取指定日期全部股票的日K线数据
-    # download_data_sample("2019-02-25")
+    download_data_sample("2019-02-25")
     # trade_date_sample()
-    download_history_k_data_sample()
+    # download_history_k_data_sample()
 '''
 参数名称	参数描述	算法说明
 date	交易所行情日期	

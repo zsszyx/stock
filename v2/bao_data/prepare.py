@@ -7,13 +7,14 @@ import logging
 import time
 import contextlib
 import functools
+import numpy as np
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # 数据库路径
-DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'stock_data.db')
+DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'stock_data.db')
 # DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'stock_data.db')
 
 # =============== 数据库链接装饰器 =================
@@ -77,7 +78,7 @@ def fetch_trade_dates(start_date=None, end_date=None):
 
 # ================= 股票基本信息 =================
 
-# @bs_login_required
+@bs_login_required
 def fetch_stock_list(start_date=None, end_date=None):
     """获取交易日数据"""
     if start_date is None:
@@ -88,7 +89,10 @@ def fetch_stock_list(start_date=None, end_date=None):
     logger.info(f"获取 {end_date} 的股票列表")
     rs = bs.query_all_stock(end_date)
     df = rs.get_data()
+    df = df[~df['code'].str.startswith(('sh.000', 'sz.399'))]
+    # df = df[df['code'].str.startswith(('sh.688', 'sz.300'))]  # 科创板和创业板
     logger.info(f"获取到 {len(df)} 只股票信息")
+
     return df['code'], df['code_name']
 
 def fetch_daily_kline(code, start_date=None, end_date=None, adjustflag="2"):
@@ -188,9 +192,52 @@ def save_kline_to_db(conn, cursor, code, name, df, start_date, end_date):
     logger.info(f"已将 {code} 的 {len(df)} 条K线数据保存到表 {table_name}")
     return table_name
 
+class DataFramePipeline:
+    def __init__(self):
+        self.plugins = []
+
+    def register(self, plugin):
+        """注册一个数据处理插件"""
+        self.plugins.append(plugin)
+
+    def run(self, df):
+        """按顺序执行所有插件"""
+        for plugin in self.plugins:
+            df = plugin(df)
+        return df
+
+def calc_ma30(df):
+    """
+    计算30日收盘价滑动均线和30日成交量均值，并去除前面没有均线的行
+    :param df: 包含至少 'close' 和 'volume' 列的DataFrame
+    :return: 新的DataFrame，包含'ma30'和'vol_ma30'列，且去除前面没有均线的行
+    """
+    df['ma30'] = df['close'].rolling(window=30).mean()
+    df['vol_ma30'] = df['volume'].rolling(window=30).mean()
+    df = df.dropna(subset=['ma30', 'vol_ma30']).reset_index(drop=True)
+    return df
+
+def normalize_by_ma30(df):
+    """
+    将 open, high, low, close 分别除以30日均线（ma30），
+    volume 除以30日成交量均值（vol_ma30），生成新列
+    :param df: 包含 'open', 'high', 'low', 'close', 'ma30', 'volume', 'vol_ma30' 列的DataFrame
+    :return: 新的DataFrame，包含归一化后的新列
+    """
+    for col in ['open', 'high', 'low', 'close']:
+        df[f'{col}_ma30_ratio'] = df[col] / df['ma30']
+    df['volume_vol_ma30_ratio'] = df['volume'] / df['vol_ma30']
+    return df
+
+# 示例用法
+pipeline = DataFramePipeline()
+pipeline.register(calc_ma30)
+pipeline.register(normalize_by_ma30)
+# df = pipeline.run(df)
+
 @with_db_connection
 @bs_login_required
-def update_stock_daily_kline(conn, cursor, codes=None, force_update=False):
+def update_stock_daily_kline(conn, cursor, codes=None, force_update=False, process=False):
     """更新股票日K线数据
     
     参数:
@@ -241,6 +288,10 @@ def update_stock_daily_kline(conn, cursor, codes=None, force_update=False):
                 
             # 获取从已有数据结束日期到今天的新数据
             df = fetch_daily_kline(code, start_date=formatted_end_date, end_date=today)
+            if process:
+                # 如果需要处理数据，则使用管道处理
+                df = pipeline.run(df)
+
             if df is not None and not df.empty:
                 # 读取已有数据
                 existing_df = pd.read_sql_query(f"SELECT * FROM {existing_info['table_name']}", conn)
@@ -277,7 +328,8 @@ def update_stock_daily_kline(conn, cursor, codes=None, force_update=False):
     logger.info(f"K线数据更新完成: 成功 {success_count}, 失败 {fail_count}, 跳过 {skip_count}")
 
 if __name__ == "__main__":
-    # fetch_stock_list()
+    # rs = fetch_stock_list()
+    # print(rs)
     # print(fetch_trade_dates())
     # update_stock_daily_kline()
     print(DB_PATH)
