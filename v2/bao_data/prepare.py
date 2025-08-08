@@ -78,7 +78,7 @@ def fetch_trade_dates(start_date=None, end_date=None):
 
 # ================= 股票基本信息 =================
 
-@bs_login_required
+# @bs_login_required
 def fetch_stock_list(start_date=None, end_date=None):
     """获取交易日数据"""
     if start_date is None:
@@ -154,17 +154,18 @@ def get_table_info_from_db(conn, cursor):
     cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'line_%'")
     # cursor
     tables = cursor.fetchall()
+    tables = [table[0] for table in tables]
     table_info = {}
     for table in tables:
-        table_name = table[0]
+        table_name = table
         # 解析表名 line_code_startdate_enddate
         parts = table_name.split('_')
-        if len(parts) == 5:
+        if len(parts) == 6:
             code = parts[1]
             name = parts[2]
-            start_date = parts[2]
-            end_date = parts[3]
-            lens = parts[4]
+            start_date = parts[3]
+            end_date = parts[4]
+            lens = parts[5]
             table_info[code] = {
                 'table_name': table_name,
                 'name': name,
@@ -173,6 +174,16 @@ def get_table_info_from_db(conn, cursor):
                 'length': lens
             }
     return table_info
+
+@with_db_connection
+def get_table_names_with_connection(conn, cursor):
+    """获取数据库中已存在的K线数据表信息"""
+    
+    # 查询所有以line_开头的表
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'line_%'")
+    tables = cursor.fetchall()
+    # 返回表名字符串列表而不是元组列表
+    return [table[0] for table in tables]
 
 def save_kline_to_db(conn, cursor, code, name, df, start_date, end_date):
     """保存K线数据到数据库"""
@@ -237,7 +248,7 @@ pipeline.register(normalize_by_ma30)
 
 @with_db_connection
 @bs_login_required
-def update_stock_daily_kline(conn, cursor, codes=None, force_update=False, process=False):
+def update_stock_daily_kline(conn, cursor, codes=None, force_update=False, process=False, max_stocks=None):
     """更新股票日K线数据
     
     参数:
@@ -260,20 +271,22 @@ def update_stock_daily_kline(conn, cursor, codes=None, force_update=False, proce
         if codes is None:
             logger.error("无法获取股票列表，更新失败")
             return
-    
+    if max_stocks is not None:
+        codes = codes[:max_stocks]
+        names = names[:max_stocks]
     total_stocks = len(codes)
     logger.info(f"开始更新 {total_stocks} 只股票的K线数据")
     
     success_count = 0
     fail_count = 0
     skip_count = 0
-    
+
     for i, (code, name) in enumerate(zip(codes, names)):
         
         code_clean = code.replace('.', '')
             
         # 检查是否已存在该股票的数据表
-        if code_clean in existing_tables and not force_update:
+        if code_clean in existing_tables.keys() and not force_update:
             existing_info = existing_tables[code_clean]
             existing_end_date = existing_info['end_date']
                 
@@ -318,6 +331,10 @@ def update_stock_daily_kline(conn, cursor, codes=None, force_update=False, proce
             start_date = (datetime.datetime.now() - datetime.timedelta(days=730)).strftime('%Y-%m-%d')
             df = fetch_daily_kline(code, start_date=start_date, end_date=today)
             if df is not None and not df.empty:
+                if process:
+                    # 如果需要处理数据，则使用管道处理
+                    df = pipeline.run(df)
+                # 保存数据到数据库
                 save_kline_to_db(conn, cursor, code, name, df, start_date, today)
                 logger.info(f"[{i+1}/{total_stocks}] {code} 新增数据成功")
                 success_count += 1
@@ -331,5 +348,5 @@ if __name__ == "__main__":
     # rs = fetch_stock_list()
     # print(rs)
     # print(fetch_trade_dates())
-    # update_stock_daily_kline()
-    print(DB_PATH)
+    update_stock_daily_kline(max_stocks=10, process=True,force_update=True)
+    # print(DB_PATH)

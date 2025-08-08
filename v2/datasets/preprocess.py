@@ -75,7 +75,6 @@ def label_by_future_pctchg_sum(df, window=5, threshold=10):
     label = np.zeros(len(df))
     for i in range(len(df)-window+1):
         pctchg_sum = df['pctChg'].iloc[i:i+window].sum()
-        print(pctchg_sum)
         if pctchg_sum > threshold:
             label[i] = 1
         else:
@@ -85,86 +84,20 @@ def label_by_future_pctchg_sum(df, window=5, threshold=10):
     df.loc[df.index[-window+1:], 'filter'] = 0
     return df
 
-class SingleTableDatasetIterator:
-    def __init__(self, df, window_size=60, label_field='label', filter_field='filter'):
-        """
-        :param df: 已处理好的DataFrame
-        :param window_size: 滑动窗口长度
-        :param feature_fields: 特征字段列表（不含label/filter），默认自动推断
-        :param label_field: 标签字段名
-        :param filter_field: 过滤字段名
-        """
-        self.window_size = window_size
-        self.label_field = label_field
-        self.filter_field = filter_field
-        self.df = df
-        self.shuffle = True  # 是否打乱数据顺序
-
-
-    def __iter__(self):
-        valid_indices = [
-            idx for idx in range(self.window_size - 1, len(self.df))
-            if self.df.at[idx, self.filter_field] == 1
-        ]
-        if self.shuffle:
-            random.shuffle(valid_indices)
-        for idx in valid_indices:
-            window = self.df.iloc[idx - self.window_size + 1: idx + 1]
-            X = window[feature_fields].values
-            y = self.df.at[idx, self.label_field]
-            yield X, y
-
-class MultiTableDatasetIterator:
-    def __init__(self, db_path, table_names, window_size=30, label_field='label', filter_field='filter'):
-        """
-        :param db_path: 数据库文件路径
-        :param table_names: 需要读取的表名列表
-        :param window_size: 滑动窗口长度
-        :param label_field: 标签字段名
-        :param filter_field: 过滤字段名
-        """
-        self.db_path = db_path
-        self.table_names = table_names
-        self.window_size = window_size
-        self.label_field = label_field
-        self.filter_field = filter_field
-        self.shuffle = True  # 是否打乱表顺序
-
-    def __iter__(self):
-        conn = sqlite3.connect(self.db_path)
-        if self.shuffle:
-            random.shuffle(self.table_names)
-        for table in self.table_names:
-            df = pd.read_sql_query(f"SELECT * FROM {table}", conn)
-            df = dataset_pipeline.run(df)  # 使用数据集处理管道处理DataFrame
-            iterator = SingleTableDatasetIterator(df, window_size=self.window_size, label_field=self.label_field, filter_field=self.filter_field)
-            for X, y in iterator:
-                yield X, y
-
-
 # 使用示例
 dataset_pipeline = DatasetsPipeline()
 dataset_pipeline.register(select_and_sort_features)
 dataset_pipeline.register(filter_by_max_growth)
 dataset_pipeline.register(label_by_future_pctchg_sum)
 
-test_df = pd.DataFrame({
+
+
+if __name__ == "__main__":
+    test_df = pd.DataFrame({
     'date': pd.date_range(start='2023-01-01', periods=12),
     'pctChg': [1, 2, 3, 4, 2, 3,2,1, 1, 1, 1, 9],
     'filter': [1]*12
-})
-# 运行数据集处理管道
-test_df = filter_by_max_growth(test_df)
-processed_df = label_by_future_pctchg_sum(test_df)
-# 输出处理后的DataFrame
-print(processed_df)
+    })
 
-# 用法示例
-# for X, y in SingleTableDatasetIterator(processed_df, window_size=30):
-#     print(X.shape, y)
-
-# 用法示例
-# db_path = '/path/to/your/stock_data.db'
-# table_names = ['line_sh600000_...']  # 需要处理的表名列表
-# for X, y in MultiTableDatasetIterator(db_path, table_names, window_size=30):
-#     print(X.shape, y)
+    processed_df = label_by_future_pctchg_sum(test_df)
+    print(processed_df)

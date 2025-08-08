@@ -1,1 +1,2 @@
-from prepare import DB_PATH
+from . import prepare
+from .prepare import DB_PATH
