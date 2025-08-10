@@ -5,10 +5,11 @@ import torch
 from torch.utils.data import IterableDataset, DataLoader
 import numpy as np
 import sys
-sys.path.append('/Users/zsy/stock/stock/v2')
+from os import path as os_path
+sys.path.append(os_path.dirname(os_path.dirname(__file__)))
 from bao_data import DB_PATH
 from bao_data.prepare import get_table_names_with_connection
-from preprocess import dataset_pipeline, feature_fields
+from datasets.preprocess import dataset_pipeline, feature_fields
 
 
 class MultiTableTorchIterableDataset(IterableDataset):

@@ -84,12 +84,13 @@ def fetch_stock_list(start_date=None, end_date=None):
     if start_date is None:
         start_date = (datetime.datetime.now() - datetime.timedelta(days=365)).strftime('%Y-%m-%d')
     if end_date is None:
-        end_date = (datetime.datetime.now() - datetime.timedelta(days=1)).strftime('%Y-%m-%d')
+        end_date = (datetime.datetime.now() - datetime.timedelta(days=5)).strftime('%Y-%m-%d')
     
     logger.info(f"获取 {end_date} 的股票列表")
     rs = bs.query_all_stock(end_date)
     df = rs.get_data()
     df = df[~df['code'].str.startswith(('sh.000', 'sz.399'))]
+    df = df[~df['code_name'].str.contains(r'\*|ST')]
     # df = df[df['code'].str.startswith(('sh.688', 'sz.300'))]  # 科创板和创业板
     logger.info(f"获取到 {len(df)} 只股票信息")
 
@@ -183,6 +184,7 @@ def get_table_names_with_connection(conn, cursor):
     cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'line_%'")
     tables = cursor.fetchall()
     # 返回表名字符串列表而不是元组列表
+    tables = [table for table in tables if not any(s in table[0] for s in ['ST', 'S', '*'])]
     return [table[0] for table in tables]
 
 def save_kline_to_db(conn, cursor, code, name, df, start_date, end_date):
@@ -348,5 +350,5 @@ if __name__ == "__main__":
     # rs = fetch_stock_list()
     # print(rs)
     # print(fetch_trade_dates())
-    update_stock_daily_kline(max_stocks=10, process=True,force_update=True)
+    update_stock_daily_kline(max_stocks=1000,process=True,force_update=True)
     # print(DB_PATH)
