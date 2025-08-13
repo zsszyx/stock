@@ -350,5 +350,5 @@ if __name__ == "__main__":
     # rs = fetch_stock_list()
     # print(rs)
     # print(fetch_trade_dates())
-    update_stock_daily_kline(max_stocks=1000,process=True,force_update=True)
+    update_stock_daily_kline(process=True,force_update=False)
     # print(DB_PATH)

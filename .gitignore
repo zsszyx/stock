@@ -33,6 +33,7 @@ tempCodeRunnerFile.py
 **/*.pyc
 **/*.pth
 **/training_history.png
+**/*.png
 **/training_history.json
 # PyInstaller
 #  Usually these files are written by a python script from a template

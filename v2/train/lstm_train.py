@@ -374,22 +374,22 @@ class StockTrainer:
              val_pos_metrics, attention_weights, val_targets, val_predictions) = self.validate_epoch(epoch)
             
             # 记录历史
-            self.history['train_loss'].append(train_loss)
-            self.history['train_acc'].append(train_acc)
-            self.history['val_loss'].append(val_loss)
-            self.history['val_acc'].append(val_acc)
-            self.history['val_precision'].append(val_precision)
-            self.history['val_recall'].append(val_recall)
-            self.history['val_f1'].append(val_f1)
+            self.history['train_loss'].append(float(train_loss))
+            self.history['train_acc'].append(float(train_acc))
+            self.history['val_loss'].append(float(val_loss))
+            self.history['val_acc'].append(float(val_acc))
+            self.history['val_precision'].append(float(val_precision))
+            self.history['val_recall'].append(float(val_recall))
+            self.history['val_f1'].append(float(val_f1))
             
             # 正样本指标记录
-            self.history['positive_precision'].append(val_pos_metrics['precision'])
-            self.history['positive_recall'].append(val_pos_metrics['recall'])
-            self.history['positive_f1'].append(val_pos_metrics['f1'])
-            self.history['positive_specificity'].append(val_pos_metrics['specificity'])
-            self.history['positive_support'].append(val_pos_metrics['support'])
-            self.history['train_positive_acc'].append(train_pos_metrics['accuracy'])
-            self.history['val_positive_acc'].append(val_pos_metrics['accuracy'])
+            self.history['positive_precision'].append(float(val_pos_metrics['precision']))
+            self.history['positive_recall'].append(float(val_pos_metrics['recall']))
+            self.history['positive_f1'].append(float(val_pos_metrics['f1']))
+            self.history['positive_specificity'].append(float(val_pos_metrics['specificity']))
+            self.history['positive_support'].append(float(val_pos_metrics['support']))
+            self.history['train_positive_acc'].append(float(train_pos_metrics['accuracy']))
+            self.history['val_positive_acc'].append(float(val_pos_metrics['accuracy']))
             
             # 保存注意力权重样本
             if attention_weights and len(attention_weights) > 0:
@@ -516,7 +516,7 @@ def create_data_loaders(batch_size=32, window_size=30, train_ratio=0.8):
 def main():
     """主训练函数"""
     # 训练参数
-    BATCH_SIZE = 512
+    BATCH_SIZE = 2048*2*2
     WINDOW_SIZE = 30
     FEATURE_DIM = len(feature_fields) - 1  # 减去label字段
     HIDDEN_DIM = 128
@@ -559,7 +559,7 @@ def main():
     
     # 学习率调度器 - 基于正样本F1调整
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='max', factor=0.5, patience=5, verbose=True
+        optimizer, mode='max', factor=0.5, patience=5
     )
     
     # 创建训练器

@@ -186,7 +186,7 @@ class StockPatternLoss(nn.Module):
         ce_loss = F.cross_entropy(predictions, targets, weight=self.class_weights, reduction='none')
         pt = torch.exp(-ce_loss)
         focal_loss = self.alpha * (1 - pt) ** self.gamma * ce_loss
-        return focal_loss.mean()
+        return ce_loss.mean()
 
 # 示例用法和测试
 if __name__ == "__main__":
