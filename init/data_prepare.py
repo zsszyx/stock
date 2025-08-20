@@ -430,7 +430,16 @@ def fetch_batch_kline_data_with_baostock(params_list):
                   df[['成交量', '成交额', '换手率']].isnull().all(axis=1))]
 
         print(f"使用 baostock 获取数据 {symbol} {start_date}-{end_date}")
-        fetched_data.append((params, check_data(df)))
+            # 将能转换成数值的列都转换成数值类型
+        numeric_cols = []
+        for col in df.columns[1:]:
+            df[col] = pd.to_numeric(df[col])
+            numeric_cols.append(col)
+        df[numeric_cols] = df[numeric_cols].infer_objects(copy=False)
+        df[numeric_cols] = df[numeric_cols].interpolate(method='linear', limit_direction='both')
+        # 3. 使用 ffill 和 bfill 替代 fillna(method=...)
+        df[numeric_cols] = df[numeric_cols].ffill().bfill()
+        fetched_data.append((params, df))
 
     bs.logout()  # 登出 baostock
     return fetched_data
@@ -494,9 +503,4 @@ def map_exchange_by_code(stock_code):
 
 
 if __name__ == "__main__":
-    from validate import check_data
-    fetch_history_stock_data_from_multiple_sources(
-        symbol="000001", period="daily", start_date="20230801", end_date="20231231", adjust="qfq"
-    )
-else:
-    from init import check_data
+    initialize_data()

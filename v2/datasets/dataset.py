@@ -86,6 +86,8 @@ class MultiTableDatasetIterator:
             random.shuffle(self.table_names)
         for table in self.table_names:
             df = pd.read_sql_query(f"SELECT * FROM {table}", conn)
+            if df.empty:
+                continue
             df = dataset_pipeline.run(df)  # 使用数据集处理管道处理DataFrame
             iterator = SingleTableDatasetIterator(df, window_size=self.window_size, label_field=self.label_field, filter_field=self.filter_field)
             for X, y in iterator:

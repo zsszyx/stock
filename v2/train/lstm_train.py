@@ -519,6 +519,7 @@ def main():
     BATCH_SIZE = 2048*2*2
     WINDOW_SIZE = 30
     FEATURE_DIM = len(feature_fields) - 1  # 减去label字段
+    print(f'feature_dim: {FEATURE_DIM}, feature_fields: {feature_fields}')
     HIDDEN_DIM = 128
     NUM_LAYERS = 2
     DROPOUT = 0.3

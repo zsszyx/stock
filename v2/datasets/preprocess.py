@@ -11,7 +11,12 @@ feature_fields = [
     'low_ma30_ratio', 
     'close_ma30_ratio', 
     'volume_vol_ma30_ratio',
-    'pctChg'
+    'pctChg',
+    'turn',
+    'peTTM',
+    'pbMRQ',
+    'psTTM',
+    'pcfNcfTTM'
 ]
 
 class DatasetsPipeline:
@@ -38,6 +43,7 @@ def select_and_sort_features(df, feature_fields=feature_fields, date_field='date
     """
     df = df[feature_fields]
     df = df.sort_values(by=date_field, ascending=True).reset_index(drop=True)
+    # print(df)
     return df[feature_fields[1:]]
 
 def filter_by_max_growth(df,window=5):
@@ -84,13 +90,16 @@ def label_by_future_pctchg_sum(df, window=5, threshold=10):
     df.loc[df.index[-window+1:], 'filter'] = 0
     return df
 
+def pecent_to_float(df):
+    df['pctChg'] = df['pctChg'].astype(float) / 100.0
+    df['turn'] = df['turn'].astype(float) / 100.0
+    return df
 # 使用示例
 dataset_pipeline = DatasetsPipeline()
 dataset_pipeline.register(select_and_sort_features)
 dataset_pipeline.register(filter_by_max_growth)
 dataset_pipeline.register(label_by_future_pctchg_sum)
-
-
+dataset_pipeline.register(pecent_to_float)
 
 if __name__ == "__main__":
     test_df = pd.DataFrame({

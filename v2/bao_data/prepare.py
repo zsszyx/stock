@@ -242,10 +242,43 @@ def normalize_by_ma30(df):
     df['volume_vol_ma30_ratio'] = df['volume'] / df['vol_ma30']
     return df
 
+def mark_zhu_erbo_condition(df: pd.DataFrame):
+    """
+    朱二波条件：
+    标记最近十天内有涨跌幅大于 9.85%，并且当天满足以下条件：
+    - 涨跌幅在 -1% 到 3% 之间。
+    - 振幅小于 5%。
+    - 换手率大于 2%。
+    在 DataFrame 中增加一列 '朱二波条件'，标记当天是否符合条件。
+    :param df: 包含股票数据的 DataFrame，必须包含 '涨跌幅'、'振幅' 和 '换手率' 列
+    :return: 增加标记列的 DataFrame
+    """
+    required_columns = ['pctChg', 'turn']
+    for col in required_columns:
+        if col not in df.columns:
+            raise ValueError(f"DataFrame 必须包含 '{col}' 列！")
+
+    # 初始化标记列
+    df['erbo'] = 0
+    df['amplitude'] = (df['high'] - df['low']) / df['close'] * 100  # 振幅计算
+
+
+    # 滑动窗口处理
+    for i in range(len(df) - 9):  # 确保窗口范围在数据长度内
+        window = df.iloc[i:i + 10]  # 取最近十天的滑动窗口
+
+        # 判断条件
+        if window['pctChg'].max() > 9.85 and -1 <= window.iloc[-1]['pctChg'] <= 3 and window.iloc[-1]['amplitude'] < 5 and window.iloc[-1]['turn'] > 2:
+            df.at[i + 9, 'erbo'] = 1  # 标记当天符合条件
+
+    return df
+
 # 示例用法
 pipeline = DataFramePipeline()
 pipeline.register(calc_ma30)
 pipeline.register(normalize_by_ma30)
+pipeline.register(mark_zhu_erbo_condition)
+
 # df = pipeline.run(df)
 
 @with_db_connection

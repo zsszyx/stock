@@ -1,64 +1,14 @@
 import pandas as pd
 import warnings
+import os
+import sys
+import numpy as np
+from scipy import stats
+sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 from init import *
 from init.data_prepare import read_main_board, read_growth_board, get_stock_zh_a_hist, get_start_to_end_date, get_stock_zh_a_hist_batch
 
 alpha = 0.5  # 黄金分割率
-def mark_long_erbo_condition1(df: pd.DataFrame):
-    """
-    长二波条件1：
-    对 DataFrame 按照 15 行的滑动窗口判断：
-    - 过去五天涨跌幅小于 5%
-    - 前十天有涨跌幅大于 9%
-    在 DataFrame 中增加一列 '长二波条件1'，标记当天是否符合条件。
-    :param df: 包含股票数据的 DataFrame，必须包含 '涨跌幅' 列
-    :return: 增加标记列的 DataFrame
-    """
-    if '涨跌幅' not in df.columns:
-        raise ValueError("DataFrame 必须包含 '涨跌幅' 列！")
-
-    # 初始化标记列
-    df['长二波条件1'] = False
-
-    # 滑动窗口处理
-    for i in range(len(df) - 14):  # 确保窗口范围在数据长度内
-        window = df.iloc[i:i + 15]  # 取 15 行的滑动窗口
-        past_5_days = window.iloc[-5:]  # 过去五天
-        past_10_days = window.iloc[:-5]  # 前十天
-
-        # 判断条件
-        if past_5_days['涨跌幅'].max() < 5 and past_10_days['涨跌幅'].max() > 9:
-            df.at[i + 14, '长二波条件1'] = True  # 标记当天符合条件
-
-    return df
-
-def mark_short_erbo_condition1(df: pd.DataFrame):
-    """
-    短二波条件1：
-    对 DataFrame 按照 10 行的滑动窗口判断：
-    - 前 7 天有涨跌幅大于 9%
-    - 后 3 天涨跌幅小于 5%
-    在 DataFrame 中增加一列 '短二波条件1'，标记当天是否符合条件。
-    :param df: 包含股票数据的 DataFrame，必须包含 '涨跌幅' 列
-    :return: 增加标记列的 DataFrame
-    """
-    if '涨跌幅' not in df.columns:
-        raise ValueError("DataFrame 必须包含 '涨跌幅' 列！")
-
-    # 初始化标记列
-    df['短二波条件1'] = False
-
-    # 滑动窗口处理
-    for i in range(len(df) - 9):  # 确保窗口范围在数据长度内
-        window = df.iloc[i:i + 10]  # 取 10 行的滑动窗口
-        past_7_days = window.iloc[:7]  # 前 7 天
-        last_3_days = window.iloc[7:]  # 后 3 天
-
-        # 判断条件
-        if past_7_days['涨跌幅'].max() > 9 and last_3_days['涨跌幅'].max() < 5:
-            df.at[i + 9, '短二波条件1'] = True  # 标记当天符合条件
-
-    return df
 
 def filter_zhu_erbo_condition0():
     """
@@ -106,12 +56,12 @@ def mark_zhu_erbo_condition1(df: pd.DataFrame):
     df['朱二波条件1'] = False
 
     # 滑动窗口处理
-    for i in range(len(df) - 9):  # 确保窗口范围在数据长度内
-        window = df.iloc[i:i + 10]  # 取最近十天的滑动窗口
+    for i in range(len(df) - 19):  # 确保窗口范围在数据长度内
+        window = df.iloc[i:i + 20]  # 取最近十天的滑动窗口
 
         # 判断条件
         if window['涨跌幅'].max() > 9.85 and -1 <= window.iloc[-1]['涨跌幅'] <= 3 and window.iloc[-1]['振幅'] < 5 and window.iloc[-1]['换手率'] > 2:
-            df.at[i + 9, '朱二波条件1'] = True  # 标记当天符合条件
+            df.at[i + 19, '朱二波条件1'] = True  # 标记当天符合条件
 
     return df
 
@@ -158,31 +108,8 @@ def mark_consecutive_small_positive(df: pd.DataFrame):
             df.at[df.index[i], '连续缩量小阳线'] = consecutive_days
         else:
             consecutive_days = 0  # 不符合条件时重置连续天数
-
-    return df
-
-def mark_consecutive_support(df: pd.DataFrame):
-    """
-    检查过去连续缩量小阳线的值：
-    - 如果当天的 '连续缩量小阳线' 值大于等于 2 且后一天的值小于今天的值，则标记 '承接' 列为 1，否则为 0。
-    - 统计 '承接' 列中值为 1 的次数，并记录在 '总共承接次数' 列中。
-    :param df: 包含股票数据的 DataFrame，必须包含 '连续缩量小阳线' 列。
-    :return: 增加 '承接' 和 '总共承接次数' 列的 DataFrame。
-    """
-    if '连续缩量小阳线' not in df.columns:
-        raise ValueError("DataFrame 必须包含 '连续缩量小阳线' 列！")
-
-    # 初始化标记列
-    df['承接'] = 0
-
-    # 遍历 DataFrame，检查条件
-    for i in range(len(df) - 1):  # 确保不会超出索引范围
-        if df.iloc[i]['连续缩量小阳线'] >= 2 and df.iloc[i + 1]['连续缩量小阳线'] < df.iloc[i]['连续缩量小阳线']:
-            df.at[df.index[i], '承接'] = 1
-
-    # 统计 '承接' 列中值为 1 的次数
-    df['总共承接次数'] = df['承接'].cumsum()
-
+    # 记录连续天数的最大值
+    df['连续缩量小阳线最大值'] = df['连续缩量小阳线'].cummax()
     return df
 
 def mark_volume_support(df: pd.DataFrame):
@@ -214,122 +141,312 @@ def mark_volume_support(df: pd.DataFrame):
 
     return df
 
-def mark_consecutive_small_negative(df: pd.DataFrame):
+def mark_yang_yin_difference(df: pd.DataFrame):
     """
-    寻找连续的缩量小阴线：
-    - 最近 20 天成交量的均值和标准差。
-    - 成交量小于均值减标准差。
-    - 最近 20 天开盘减去收盘绝对值的均值和标准差。
-    - 开盘减去收盘的绝对值小于均值减去 1 个标准差且收盘价小于开盘价。
-    - 统计符合条件的连续天数，并记录在一列 '连续缩量小阴线' 中。
-    :param df: 包含股票数据的 DataFrame，必须包含 '开盘'、'收盘' 和 '成交量' 列。
-    :return: 增加标记列的 DataFrame。
+    计算过去二十天涨跌幅在-5%到5%之间阳线比阴线多多少天：
+    - 过去二十天中涨跌幅在-5%到5%之间的交易日
+    - 阳线：收盘价大于开盘价
+    - 阴线：收盘价小于开盘价
+    - 计算阳线天数减去阴线天数的差值
+    在 DataFrame 中增加一列 '阳线比阴线多天数'，记录差值。
+    :param df: 包含股票数据的 DataFrame，必须包含 '开盘'、'收盘'、'涨跌幅' 列
+    :return: 增加标记列的 DataFrame
     """
-    required_columns = ['开盘', '收盘', '成交量']
+    required_columns = ['开盘', '收盘', '涨跌幅']
     for col in required_columns:
         if col not in df.columns:
             raise ValueError(f"DataFrame 必须包含 '{col}' 列！")
 
     # 初始化标记列
-    df['连续缩量小阴线'] = 0
+    df['阳线比阴线多天数'] = 0
 
     # 滑动窗口处理
-    consecutive_days = 0  # 记录连续天数
     for i in range(len(df)):
-        # 计算最近 20 天成交量的均值和标准差
-        volume_window = df.iloc[max(0, i - 19):i + 1]  # 最近 20 天的窗口
-        volume_mean = volume_window['成交量'].mean()
-        volume_std = volume_window['成交量'].std()
-
-        # 计算最近 20 天开盘减去收盘绝对值的均值和标准差
-        open_close_diff = (volume_window['开盘'] - volume_window['收盘']).abs()  # 开盘减去收盘的绝对值
-        diff_mean = open_close_diff.mean()
-        diff_std = open_close_diff.std()
-
-        # 判断当天是否符合条件
-        current_diff = abs(df.iloc[i]['开盘'] - df.iloc[i]['收盘'])
-        if (
-            df.iloc[i]['成交量'] < (volume_mean - alpha * volume_std) and  # 成交量条件
-            current_diff < (diff_mean - alpha * diff_std) and  # 开盘减去收盘绝对值条件
-            df.iloc[i]['收盘'] < df.iloc[i]['开盘']  # 收盘价小于开盘价（小阴线）
-        ):
-            consecutive_days += 1
-            df.at[df.index[i], '连续缩量小阴线'] = consecutive_days
-        else:
-            consecutive_days = 0  # 不符合条件时重置连续天数
+        # 获取过去二十天的窗口（包括当天）
+        window = df.iloc[max(0, i - 19):i + 1]
+        
+        # 筛选涨跌幅在-5%到5%之间的交易日
+        filtered_window = window[(window['涨跌幅'] >= -5) & (window['涨跌幅'] <= 5)]
+        
+        if len(filtered_window) == 0:
+            df.at[df.index[i], '阳线比阴线多天数'] = 0
+            continue
+        
+        # 计算阳线和阴线天数
+        yang_days = (filtered_window['收盘'] > filtered_window['开盘']).sum()  # 阳线：收盘 > 开盘
+        yin_days = (filtered_window['收盘'] < filtered_window['开盘']).sum()   # 阴线：收盘 < 开盘
+        
+        # 计算差值
+        difference = yang_days - yin_days
+        df.at[df.index[i], '阳线比阴线多天数'] = difference
 
     return df
 
-def mark_two_positive_one_negative(df: pd.DataFrame):
+def mark_low_volatility_and_flat_trend(df: pd.DataFrame, window_days=5):
     """
-    判断两阳夹一阴的情况：
-    - 如果当天连续缩量小阳线为 1 天，前一天连续缩量小阴线为 1 天，再前一天连续缩量小阳线为 1 天，
-      则标记 '两阳夹一阴' 列为 1，否则为 0。
-    - 统计 '两阳夹一阴' 列中值为 1 的次数，并记录在 '总共两阳夹一阴次数' 列中。
-    :param df: 包含股票数据的 DataFrame，必须包含 '连续缩量小阳线' 和 '连续缩量小阴线' 列。
-    :return: 增加 '两阳夹一阴' 和 '总共两阳夹一阴次数' 列的 DataFrame。
+    判断最近几天低波动且趋势平缓的条件：
+    - 最近五天的最大涨幅小于5%
+    - 最近几天的收盘价用一条线拟合后斜率小于1
+    在 DataFrame 中增加一列 '低波动平缓趋势'，标记当天是否符合条件。
+    同时增加 '最近5天最大涨幅' 和 '收盘价拟合斜率' 列用于分析。
+    :param df: 包含股票数据的 DataFrame，必须包含 '涨跌幅' 和 '收盘' 列
+    :param window_days: 分析的天数窗口，默认5天
+    :return: 增加标记列的 DataFrame
     """
-    required_columns = ['连续缩量小阳线', '连续缩量小阴线']
+    required_columns = ['涨跌幅', '收盘']
     for col in required_columns:
         if col not in df.columns:
             raise ValueError(f"DataFrame 必须包含 '{col}' 列！")
 
     # 初始化标记列
-    df['两阳夹一阴'] = 0
+    df['低波动平缓趋势'] = 0
+    df['最近5天最大涨幅'] = 0.0
+    df['收盘价拟合斜率'] = 0.0
 
-    # 遍历 DataFrame，检查条件
-    for i in range(2, len(df)):  # 从第 2 行开始，确保有足够的前一天和再前一天数据
-        if (
-            df.iloc[i]['连续缩量小阳线'] == 1 and  # 当天为小阳线 1 天
-            df.iloc[i - 1]['连续缩量小阴线'] == 1 and  # 前一天为小阴线 1 天
-            df.iloc[i - 2]['连续缩量小阳线'] == 1  # 再前一天为小阳线 1 天
-        ):
-            df.at[df.index[i], '两阳夹一阴'] = 1
-
-    # 统计 '两阳夹一阴' 列中值为 1 的次数
-    df['总共两阳夹一阴次数'] = df['两阳夹一阴'].cumsum()
+    # 滑动窗口处理
+    for i in range(len(df)):
+        # 获取最近window_days天的窗口（包括当天）
+        start_idx = max(0, i - window_days + 1)
+        window = df.iloc[start_idx:i + 1]
+        
+        if len(window) < 2:  # 至少需要2个点才能拟合直线
+            continue
+            
+        # 1. 计算最近五天的最大涨幅
+        max_gain = window['涨跌幅'].max()
+        df.at[df.index[i], '最近5天最大涨幅'] = max_gain
+        
+        # 2. 对收盘价进行线性拟合
+        # 创建x轴数据（天数索引）
+        x = np.arange(len(window))
+        y = window['收盘'].values
+        
+        # 使用最小二乘法进行线性拟合
+        try:
+            slope, intercept, r_value, p_value, std_err = stats.linregress(x, y)
+            df.at[df.index[i], '收盘价拟合斜率'] = slope
+            
+            # 3. 判断是否同时满足两个条件
+            if max_gain < 5.0 and slope < 1.0:
+                df.at[df.index[i], '低波动平缓趋势'] = 1
+                
+        except Exception as e:
+            # 如果拟合失败，记录为0
+            df.at[df.index[i], '收盘价拟合斜率'] = 0
 
     return df
 
-def mark_lower_shadow_analysis(df: pd.DataFrame):
+def mark_market_protection(df: pd.DataFrame):
     """
-    统计过去 20 天的下影线平均长度，并计算最近 10 天下影线大于均值的天数。
-    - 下影线长度 = 开盘价和收盘价的较小值减去最低价。
-    - 过去 20 天计算下影线的平均长度。
-    - 统计最近 10 天中下影线长度大于过去 20 天均值的天数。
+    判断护盘情况：
+    - 过去二十天是否有涨幅大于3%的阳线且小于5
+    - 如果有，判断第二天是否是涨幅大于0%的阳线并且缩量
+    - 如果是，则标记为护盘
+    - 统计护盘次数
     在 DataFrame 中增加两列：
-    - '下影线均值'：过去 20 天下影线的平均长度。
-    - '最近10天下影线大于均值天数'：最近 10 天中下影线大于均值的天数。
-    :param df: 包含股票数据的 DataFrame，必须包含 '开盘'、'收盘' 和 '最低' 列。
-    :return: 增加标记列的 DataFrame。
+    - '护盘'：当天是否为护盘（0/1）
+    - '护盘次数'：累计护盘次数
+    :param df: 包含股票数据的 DataFrame，必须包含 '涨跌幅'、'开盘'、'收盘'、'成交量' 列
+    :return: 增加标记列的 DataFrame
     """
-    required_columns = ['开盘', '收盘', '最低']
+    required_columns = ['涨跌幅', '开盘', '收盘', '成交量']
     for col in required_columns:
         if col not in df.columns:
             raise ValueError(f"DataFrame 必须包含 '{col}' 列！")
 
     # 初始化标记列
-    df['下影线均值'] = 0.0
-    df['最近10天下影线大于均值天数'] = 0
-
-    # 计算下影线长度
-    df['下影线长度'] = df[['开盘', '收盘']].min(axis=1) - df['最低']
+    df['护盘'] = 0
+    df['护盘次数'] = 0
 
     # 滑动窗口处理
-    for i in range(len(df)):
-        # 计算过去 20 天的下影线均值
-        lower_shadow_window = df.iloc[max(0, i - 19):i + 1]  # 最近 20 天的窗口
-        lower_shadow_mean = lower_shadow_window['下影线长度'].mean()
-        df.at[df.index[i], '下影线均值'] = lower_shadow_mean
+    for i in range(1, len(df)):  # 从第1行开始，确保有前一天的数据
+        # 获取过去二十天的窗口（不包括当天，因为要判断前一天的情况）
+        start_idx = max(0, i - 20)
+        window = df.iloc[start_idx:i]  # 过去二十天（不包括当天）
+        
+        if len(window) == 0:
+            continue
+            
+        # 1. 检查过去二十天是否有涨幅大于3%且小于5%的阳线
+        # 阳线条件：收盘价大于开盘价
+        yang_lines = window[(window['收盘'] > window['开盘']) & (window['涨跌幅'] > 3)
+                            & (window['涨跌幅'] < 5)]
+        
+        if len(yang_lines) == 0:
+            continue
+            
+        # 2. 找到最近一次涨幅大于3%的阳线
+        last_big_yang_idx = yang_lines.index[-1]  # 最后一次大阳线的索引
+        
+        # 3. 检查是否是前一天，并且当天（第二天）符合护盘条件
+        if last_big_yang_idx == df.index[i-1]:  # 前一天是大阳线
+            current_day = df.iloc[i]
+            previous_day = df.iloc[i-1]
+            
+            # 护盘条件：
+            # - 当天涨幅大于0%
+            # - 当天是阳线（收盘价大于开盘价）
+            # - 当天缩量（成交量小于前一天）
+            if (current_day['涨跌幅'] > 0 and 
+                current_day['收盘'] > current_day['开盘'] and 
+                current_day['成交量'] < previous_day['成交量']):
+                
+                df.at[df.index[i], '护盘'] = 1
 
-        # 计算最近 10 天中下影线大于均值的天数
-        if i >= 9:  # 确保有足够的 10 天数据
-            recent_10_days = df.iloc[i - 9:i + 1]  # 最近 10 天的窗口
-            count_greater_than_mean = (recent_10_days['下影线长度'] > lower_shadow_mean).sum()
-            df.at[df.index[i], '最近10天下影线大于均值天数'] = count_greater_than_mean
+    # 统计护盘次数（累计）
+    df['护盘次数'] = df['护盘'].cumsum()
 
-    # 删除临时列
-    df.drop(columns=['下影线长度'], inplace=True)
+    return df
+
+def mark_volume_shrinkage_vs_expansion(df: pd.DataFrame):
+    """
+    计算过去二十天缩量天数比放量天数多多少天：
+    - 缩量：当天成交量比前一天小
+    - 放量：当天成交量比前一天大
+    - 计算缩量天数减去放量天数的差值
+    在 DataFrame 中增加一列 '缩量比放量多天数'，记录差值。
+    :param df: 包含股票数据的 DataFrame，必须包含 '成交量' 列
+    :return: 增加标记列的 DataFrame
+    """
+    required_columns = ['成交量']
+    for col in required_columns:
+        if col not in df.columns:
+            raise ValueError(f"DataFrame 必须包含 '{col}' 列！")
+
+    # 初始化标记列
+    df['缩量比放量多天数'] = 0
+
+    # 滑动窗口处理
+    for i in range(1, len(df)):  # 从第1行开始，因为需要和前一天比较
+        # 获取过去二十天的窗口（包括当天）
+        start_idx = max(1, i - 19)  # 确保至少从第1行开始
+        window = df.iloc[start_idx:i + 1]
+        
+        if len(window) < 2:  # 至少需要2天数据才能比较
+            continue
+        
+        # 计算缩量和放量天数
+        shrinkage_days = 0  # 缩量天数
+        expansion_days = 0  # 放量天数
+        
+        for j in range(1, len(window)):  # 从窗口的第二天开始比较
+            current_volume = window.iloc[j]['成交量']
+            previous_volume = window.iloc[j-1]['成交量']
+            
+            if current_volume < previous_volume:
+                shrinkage_days += 1  # 缩量
+            elif current_volume > previous_volume:
+                expansion_days += 1  # 放量
+            # 成交量相等的情况不计入缩量或放量
+        
+        # 计算差值：缩量天数减去放量天数
+        difference = shrinkage_days - expansion_days
+        df.at[df.index[i], '缩量比放量多天数'] = difference
+
+    return df
+
+def mark_drop_rise_vs_drop_drop(df: pd.DataFrame):
+    """
+    统计最近二十天第一天跌第二天涨比第一天跌第二天继续跌的天数多多少：
+    - 跌涨模式：第一天涨跌幅为负，第二天涨跌幅为正
+    - 跌跌模式：第一天涨跌幅为负，第二天涨跌幅也为负
+    - 计算跌涨天数减去跌跌天数的差值
+    在 DataFrame 中增加一列 '跌涨比跌跌多天数'，记录差值。
+    :param df: 包含股票数据的 DataFrame，必须包含 '涨跌幅' 列
+    :return: 增加标记列的 DataFrame
+    """
+    required_columns = ['涨跌幅']
+    for col in required_columns:
+        if col not in df.columns:
+            raise ValueError(f"DataFrame 必须包含 '{col}' 列！")
+
+    # 初始化标记列
+    df['跌涨比跌跌多天数'] = 0
+
+    # 滑动窗口处理
+    for i in range(1, len(df)):  # 从第1行开始，因为需要比较前一天
+        # 获取过去二十天的窗口（包括当天）
+        start_idx = max(1, i - 19)  # 确保至少从第1行开始
+        window = df.iloc[start_idx:i + 1]
+        
+        if len(window) < 2:  # 至少需要2天数据才能比较
+            continue
+        
+        # 计算跌涨和跌跌模式的天数
+        drop_rise_days = 0  # 跌涨天数
+        drop_drop_days = 0  # 跌跌天数
+        
+        for j in range(1, len(window)):  # 从窗口的第二天开始比较
+            first_day_change = window.iloc[j-1]['涨跌幅']
+            second_day_change = window.iloc[j]['涨跌幅']
+            
+            if first_day_change < 0:  # 第一天跌
+                if second_day_change > 0:  # 第二天涨
+                    drop_rise_days += 1
+                elif second_day_change < 0:  # 第二天继续跌
+                    drop_drop_days += 1
+                # 第二天平盘（涨跌幅为0）不计入统计
+        
+        # 计算差值：跌涨天数减去跌跌天数
+        difference = drop_rise_days - drop_drop_days
+        df.at[df.index[i], '跌涨比跌跌多天数'] = difference
+
+    return df
+
+def mark_wash_trading(df: pd.DataFrame):
+    """
+    判断洗盘情况：
+    - 第一天是阴线且跌幅大于2%
+    - 后面两天内价格回到第一天的开盘价
+    - 如果满足条件则标记为洗盘
+    - 统计洗盘次数
+    在 DataFrame 中增加两列：
+    - '洗盘'：当天是否为洗盘完成（0/1）
+    - '洗盘次数'：累计洗盘次数
+    :param df: 包含股票数据的 DataFrame，必须包含 '涨跌幅'、'开盘'、'收盘'、'最高' 列
+    :return: 增加标记列的 DataFrame
+    """
+    required_columns = ['涨跌幅', '开盘', '收盘', '最高']
+    for col in required_columns:
+        if col not in df.columns:
+            raise ValueError(f"DataFrame 必须包含 '{col}' 列！")
+
+    # 初始化标记列
+    df['洗盘'] = 0
+    df['洗盘次数'] = 0
+
+    # 遍历数据，至少需要3天数据（第一天+后面两天）
+    for i in range(len(df) - 2):
+        first_day = df.iloc[i]
+        second_day = df.iloc[i + 1]
+        third_day = df.iloc[i + 2]
+        
+        # 1. 判断第一天是否为阴线且跌幅大于2%
+        is_first_day_qualified = (
+            first_day['收盘'] < first_day['开盘'] and  # 阴线：收盘价小于开盘价
+            first_day['涨跌幅'] < -2  # 跌幅大于2%（涨跌幅为负值）
+        )
+        
+        if not is_first_day_qualified:
+            continue
+            
+        # 2. 检查后面两天内价格是否回到第一天的开盘价
+        first_day_open = first_day['开盘']
+        
+        # 检查第二天或第三天的最高价是否达到或超过第一天的开盘价
+        second_day_recovered = second_day['最高'] >= first_day_open
+        third_day_recovered = third_day['最高'] >= first_day_open
+        
+        # 如果后面两天内任意一天回到第一天开盘价，则标记为洗盘
+        if second_day_recovered:
+            # 在第二天标记洗盘完成
+            df.at[df.index[i + 1], '洗盘'] = 1
+        elif third_day_recovered:
+            # 在第三天标记洗盘完成
+            df.at[df.index[i + 2], '洗盘'] = 1
+
+    # 统计洗盘次数（累计）
+    df['洗盘次数'] = df['洗盘'].cumsum()
 
     return df
 
@@ -372,85 +489,57 @@ def erbo_main_query_mode():
             continue
 
         # 3. 应用所有mark方法
-        df = mark_long_erbo_condition1(df)
-        df = mark_short_erbo_condition1(df)
         df = mark_zhu_erbo_condition1(df)
         df = mark_consecutive_small_positive(df)
-        df = mark_consecutive_small_negative(df)
-        df = mark_consecutive_support(df)
         df = mark_volume_support(df)
-        df = mark_two_positive_one_negative(df)
-        df = mark_lower_shadow_analysis(df)
+        df = mark_yang_yin_difference(df)
+        df = mark_low_volatility_and_flat_trend(df)
+        df = mark_market_protection(df)
+        df = mark_volume_shrinkage_vs_expansion(df)
+        df = mark_drop_rise_vs_drop_drop(df)
 
-        # # 将 DataFrame 存入 Excel 文件
-        # df.to_excel("table.xlsx", index=False)
-        # print(f"{code} {name} 的数据已保存到 table.xlsx 文件中。")
+
+
 
         # 4. 统计最新一天命中条件数量和具体命中条件
         last = df.iloc[-1]
         small_positive_days = int(last.get('连续缩量小阳线', 0))
-        total_support_count = int(last.get('总共承接次数', 0))
         volume_support_count = int(last.get('缩量承接次数', 0))
         is_volume_support = bool(last.get('缩量承接', 0))
-        total_two_positive_one_negative_count = int(last.get('总共两阳夹一阴次数', 0))
-        is_two_positive_one_negative = bool(last.get('两阳夹一阴', 0))
-        lower_shadow_days = int(last.get('最近10天下影线大于均值天数', 0))  # 下影线条件
-        conditions = []
-        if last.get('长二波条件1', False):
-            conditions.append("长二波条件1")
-        if last.get('短二波条件1', False):
-            conditions.append("短二波条件1")
-        if last.get('朱二波条件1', False):
-            conditions.append("朱二波条件1")
-        if small_positive_days > 0:
-            conditions.append(f"连续缩量小阳线{small_positive_days}天")
-        if lower_shadow_days > 0:
-            conditions.append(f"最近10天下影线大于均值{lower_shadow_days}天")
+        yang_yin_difference = int(last.get('阳线比阴线多天数', 0))
+        zhuerbo = int(last.get('朱二波条件1', 0))
+        consecutive_small_positive = int(last.get('连续缩量小阳线最大值', 0))
+        low_volatility_and_flat_trend = int(last.get('低波动平缓趋势', 0))
+        market_protection = int(last.get('护盘次数', 0))
+        volume_shrinkage_vs_expansion = int(last.get('缩量比放量多天数', 0))
+        drop_rise_vs_drop_drop = int(last.get('跌涨比跌跌多天数', 0))
+        volume_support_and_market_protection = volume_support_count + market_protection
+        wash_trading = int(last.get('洗盘', 0))
 
-        if conditions:
-            results.append({
-            "代码": code,
-            "名称": name,
-            "连续缩量小阳线天数": small_positive_days,
-            "今天是否两阳夹一阴": "是" if is_two_positive_one_negative else "否",
-            "今天是否为缩量承接": "是" if is_volume_support else "否",
-            "总共承接次数": total_support_count,
-            "缩量承接次数": volume_support_count,
-            "总共两阳夹一阴次数": total_two_positive_one_negative_count,
-            "最近10天下影线大于均值天数": lower_shadow_days,
-            "长二波条件1": last.get('长二波条件1', False),
-            "短二波条件1": last.get('短二波条件1', False),
-            "朱二波条件1": last.get('朱二波条件1', False),
-            "命中条件": ", ".join(conditions),
-            "承接+两阳一阴": total_support_count + total_two_positive_one_negative_count
-            })
+        results.append({
+        "代码": code,
+        "名称": name,
+        "连续缩量小阳线天数": small_positive_days,
+        "连续缩量小阳线最大值": consecutive_small_positive,
+        "今天是否为缩量承接": 1 if is_volume_support else 0,
+        "缩量承接次数": volume_support_count,
+        '阳线比阴线多天数': yang_yin_difference,
+        '二波': zhuerbo,
+        '低波动平缓趋势': low_volatility_and_flat_trend,
+        '护盘次数': market_protection,
+        '缩量比放量多天数': volume_shrinkage_vs_expansion,
+        '跌涨比跌跌多天数': drop_rise_vs_drop_drop,
+        '缩量承接加护盘次数': volume_support_and_market_protection,
+        '洗盘': wash_trading,
+        '洗盘承接护盘次数': wash_trading + market_protection + volume_support_count
 
-    # 5. 按照缩量小阳线天数从多到少排序
-    results.sort(key=lambda x: (-x['连续缩量小阳线天数'], x['代码']))
 
-        # 6. 打印结果并存入 Excel 文件
-        # if results:
-        #     print("命中条件数量排序结果：")
-        # for r in results:
-        #     print(
-        #     f"{r['名称']}({r['代码']}): "
-        #     f"连续缩量小阳线{r['连续缩量小阳线天数']}天, "
-        #     f"今天是否两阳夹一阴: {r['今天是否两阳夹一阴']}, "
-        #     f"总共承接次数: {r['总共承接次数']}, "
-        #     f"总共两阳夹一阴次数: {r['总共两阳夹一阴次数']}, "
-        #     f"最近10天下影线大于均值天数: {r['最近10天下影线大于均值天数']}, "
-        #     f"长二波条件1: {r['长二波条件1']}, "
-        #     f"短二波条件1: {r['短二波条件1']}, "
-        #     f"朱二波条件1: {r['朱二波条件1']}, "
-        #     f"命中条件: {r['命中条件']}"
-        #     )
+        })
 
-        # 将结果存入 Excel 文件
+    #  将结果存入 Excel 文件
     result_df = pd.DataFrame(results)
     result_df.to_excel("result.xlsx", index=False)
     print("结果已保存到 result.xlsx 文件中。")
-        # else:
-        # print("没有符合条件的股票。")
 
 if __name__ == "__main__":
     erbo_main_query_mode()
