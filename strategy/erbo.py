@@ -36,15 +36,16 @@ def filter_zhu_erbo_condition0():
     print(f"筛选后的股票数量: {len(filtered_data)}")
     return filtered_data
 
-def mark_zhu_erbo_condition1(df: pd.DataFrame):
+def mark_zhu_erbo_condition1(df: pd.DataFrame, window=20):
     """
     朱二波条件1：
-    标记最近十天内有涨跌幅大于 9.85%，并且当天满足以下条件：
+    标记最近 window 天内有涨跌幅大于 9.85%，并且当天满足以下条件：
     - 涨跌幅在 -1% 到 3% 之间。
     - 振幅小于 5%。
     - 换手率大于 2%。
     在 DataFrame 中增加一列 '朱二波条件1'，标记当天是否符合条件。
     :param df: 包含股票数据的 DataFrame，必须包含 '涨跌幅'、'振幅' 和 '换手率' 列
+    :param window: 滑动窗口天数，默认10天
     :return: 增加标记列的 DataFrame
     """
     required_columns = ['涨跌幅', '振幅', '换手率']
@@ -52,16 +53,17 @@ def mark_zhu_erbo_condition1(df: pd.DataFrame):
         if col not in df.columns:
             raise ValueError(f"DataFrame 必须包含 '{col}' 列！")
 
-    # 初始化标记列
     df['朱二波条件1'] = False
 
-    # 滑动窗口处理
-    for i in range(len(df) - 19):  # 确保窗口范围在数据长度内
-        window = df.iloc[i:i + 20]  # 取最近十天的滑动窗口
-
-        # 判断条件
-        if window['涨跌幅'].max() > 9.85 and -1 <= window.iloc[-1]['涨跌幅'] <= 3 and window.iloc[-1]['振幅'] < 5 and window.iloc[-1]['换手率'] > 2:
-            df.at[i + 19, '朱二波条件1'] = True  # 标记当天符合条件
+    for i in range(window - 1, len(df)):
+        window_df = df.iloc[i - window + 1:i + 1]
+        if (
+            window_df['涨跌幅'].max() > 9.85 and
+            -1 <= window_df.iloc[-1]['涨跌幅'] <= 3 and
+            window_df.iloc[-1]['振幅'] < 5 and
+            window_df.iloc[-1]['换手率'] > 2
+        ):
+            df.at[df.index[i], '朱二波条件1'] = True
 
     return df
 
@@ -218,21 +220,21 @@ def mark_low_volatility_and_flat_trend(df: pd.DataFrame, window_days=5):
         
         # 2. 对收盘价进行线性拟合
         # 创建x轴数据（天数索引）
-        x = np.arange(len(window))
-        y = window['收盘'].values
+        # x = np.arange(len(window))
+        # y = window['收盘'].values
         
         # 使用最小二乘法进行线性拟合
-        try:
-            slope, intercept, r_value, p_value, std_err = stats.linregress(x, y)
-            df.at[df.index[i], '收盘价拟合斜率'] = slope
+        # try:
+        #     slope, intercept, r_value, p_value, std_err = stats.linregress(x, y)
+        #     df.at[df.index[i], '收盘价拟合斜率'] = slope
             
             # 3. 判断是否同时满足两个条件
-            if max_gain < 5.0 and slope < 1.0:
-                df.at[df.index[i], '低波动平缓趋势'] = 1
+        if max_gain < 5.0:
+            df.at[df.index[i], '低波动平缓趋势'] = 1
                 
-        except Exception as e:
-            # 如果拟合失败，记录为0
-            df.at[df.index[i], '收盘价拟合斜率'] = 0
+        # except Exception as e:
+        #     # 如果拟合失败，记录为0
+        #     df.at[df.index[i], '收盘价拟合斜率'] = 0
 
     return df
 
@@ -288,6 +290,7 @@ def mark_market_protection(df: pd.DataFrame):
             # - 当天是阳线（收盘价大于开盘价）
             # - 当天缩量（成交量小于前一天）
             if (current_day['涨跌幅'] > 0 and 
+                current_day['涨跌幅'] < 5 and
                 current_day['收盘'] > current_day['开盘'] and 
                 current_day['成交量'] < previous_day['成交量']):
                 
