@@ -1,506 +1,557 @@
 import os
-import akshare as ak
-import sys
-import pandas as pd
 import sqlite3
-from datetime import datetime, timedelta
-# 动态定位当前工作目录中的 stock 目录
-import efinance
-import requests
+import pandas as pd
 import baostock as bs
-import random
-import adata as ad
-import yaml
+import datetime
+import logging
+import time
+import contextlib
+import functools
+import numpy as np
 
-# 全局反扒 user-agent 设置
-USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
+"""
+日线表格名称格式：daily_<code>_<start_date>_<end_date>_<length>
+60分钟线表格名称格式：minute60_<code>_<start_date>_<end_date>_<length>
+"""
 
-# 设置 requests 的全局 user-agent
-requests_session = requests.Session()
-requests_session.headers.update({
-    "User-Agent": USER_AGENT
-})
-# efinance 支持 session
-efinance.stock.session = requests_session
+# 配置日志
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
-# akshare 通过环境变量设置 user-agent
-os.environ["AKSHARE_REQUEST_HEADERS"] = f'{{"User-Agent": "{USER_AGENT}"}}'
+# 数据库路径
+DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'stock_data.db')
+# DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'stock_data.db')
 
-# 全局持久连接
-DB_PATH = 'stock_data.db'
-conn = sqlite3.connect(DB_PATH)  # 创建全局数据库连接
+# =============== 数据库链接装饰器 =================
+def with_db_connection(func):
+    """数据库连接的装饰器，自动处理连接的创建、提交和关闭"""
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        logger.info(f"数据库连接已建立: {DB_PATH}")
+        result = func(conn, cursor, *args, **kwargs)
+        conn.commit()
+        logger.info("数据库操作已提交")
+        cursor.close()
+        logger.info("数据库连接已关闭")
+        return result
+    return wrapper
 
-def load_proxies():
+# ================= BaoStock 登录语法糖 =================
+
+# 方式2: 装饰器
+def bs_login_required(func):
+    """BaoStock 登录装饰器，确保函数执行时已登录 BaoStock"""
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        lg = bs.login()
+        logger.info("BaoStock登录成功")
+        if lg.error_code != '0':
+            logger.error(f"登录失败: {lg.error_msg}")
+            raise ConnectionError(f"BaoStock登录失败: {lg.error_msg}")
+        result = func(*args, **kwargs)
+        bs.logout()
+        return result
+    return wrapper
+
+# ================= 交易日数据 =================
+
+# @bs_login_required
+def fetch_trade_dates(start_date=None, end_date=None):
+    """获取交易日数据"""
+    if start_date is None:
+        start_date = (datetime.datetime.now() - datetime.timedelta(days=365)).strftime('%Y-%m-%d')
+    if end_date is None:
+        end_date = datetime.datetime.now().strftime('%Y-%m-%d')
+    
+    logger.info(f"获取交易日数据: {start_date} 至 {end_date}")
+    rs = bs.query_trade_dates(start_date=start_date, end_date=end_date)
+    if rs.error_code != '0':
+        logger.error(f"查询交易日期失败: {rs.error_msg}")
+        return None
+    
+    data_list = []
+    while (rs.error_code == '0') & rs.next():
+        data_list.append(rs.get_row_data())
+    
+    df = pd.DataFrame(data_list, columns=rs.fields)
+    # 筛选出是交易日的记录并按日期降序排序
+    df = df[df['is_trading_day'] == '1']
+    logger.info(f"获取到 {len(df)} 条交易日数据")
+    return df['calendar_date']
+
+# ================= 股票基本信息 =================
+
+# @bs_login_required
+def fetch_stock_list(start_date=None, end_date=None):
+    """获取交易日数据"""
+    if start_date is None:
+        start_date = (datetime.datetime.now() - datetime.timedelta(days=365)).strftime('%Y-%m-%d')
+    if end_date is None:
+        end_date = (datetime.datetime.now() - datetime.timedelta(days=5)).strftime('%Y-%m-%d')
+    
+    logger.info(f"获取 {end_date} 的股票列表")
+    rs = bs.query_all_stock(end_date)
+    df = rs.get_data()
+    df = df[~df['code'].str.startswith(('sh.000', 'sz.399'))]
+    df = df[~df['code_name'].str.contains(r'\*|ST|退|S|T|')]
+    # df = df[df['code'].str.startswith(('sh.688', 'sz.300'))]  # 科创板和创业板
+    logger.info(f"获取到 {len(df)} 只股票信息")
+
+    return df['code'], df['code_name']
+
+def fetch_daily_kline(code, start_date=None, end_date=None, adjustflag="2"):
+    """获取股票日K线前复权数据
+    
+    参数:
+        code: 股票代码，格式如 sh.600000
+        start_date: 开始日期，默认为一年前
+        end_date: 结束日期，默认为昨天
+        adjustflag: 复权类型，2-前复权，1-后复权，3-不复权，默认前复权
     """
-    加载代理配置文件并返回代理列表。
-    :return: 代理列表
+    if start_date is None:
+        start_date = (datetime.datetime.now() - datetime.timedelta(days=365)).strftime('%Y-%m-%d')
+    if end_date is None:
+        end_date = datetime.datetime.now().strftime('%Y-%m-%d')
+    
+    logger.info(f"获取 {code} 从 {start_date} 到 {end_date} 的日K线数据")
+    
+    # K线数据字段
+    fields = "date,open,high,low,close,volume,turn,pctChg,peTTM,pbMRQ,psTTM,pcfNcfTTM"
+    
+    rs = bs.query_history_k_data_plus(code, fields, 
+                                      start_date=start_date, 
+                                      end_date=end_date,
+                                      frequency="d", 
+                                      adjustflag=adjustflag)
+    
+    if rs.error_code != '0':
+        logger.error(f"获取K线数据失败: {rs.error_msg}")
+        return None
+    
+    data_list = []
+    while (rs.error_code == '0') & rs.next():
+        data_list.append(rs.get_row_data())
+    
+    if not data_list:
+        logger.warning(f"{code} 在指定时间段没有数据")
+        return None
+    
+    df = pd.DataFrame(data_list, columns=rs.fields)
+
+    # 将能转换成数值的列都转换成数值类型
+    numeric_cols = []
+    for col in df.columns[1:]:
+        df[col] = pd.to_numeric(df[col])
+        numeric_cols.append(col)
+    df[numeric_cols] = df[numeric_cols].infer_objects(copy=False)
+    df[numeric_cols] = df[numeric_cols].interpolate(method='linear', limit_direction='both')
+    # 3. 使用 ffill 和 bfill 替代 fillna(method=...)
+    df[numeric_cols] = df[numeric_cols].ffill().bfill()
+
+    logger.info(f"获取到 {len(df)} 条K线数据")
+    return df
+
+def fetch_minute60_kline(code, start_date=None, end_date=None, adjustflag="3"):
+    """获取股票60分钟K线数据
+
+    参数:
+        code: 股票代码，格式如 sh.600000
+        start_date: 开始日期，默认为一年前
+        end_date: 结束日期，默认为昨天
+        adjustflag: 复权类型，2-前复权，1-后复权，3-不复权，默认前复权
     """
-    proxy_file_path = "d:\\stock\\init\\proxy_pool.yaml"
-    with open(proxy_file_path, "r", encoding="utf-8") as file:
-        proxy_data = yaml.safe_load(file)
-    return proxy_data.get("proxies", [])
+    if start_date is None:
+        start_date = (datetime.datetime.now() - datetime.timedelta(days=365)).strftime('%Y-%m-%d')
+    if end_date is None:
+        end_date = datetime.datetime.now().strftime('%Y-%m-%d')
 
-def get_random_proxy(proxies):
+    logger.info(f"获取 {code} 从 {start_date} 到 {end_date} 的分钟K线数据")
+
+    # K线数据字段
+    fields = "date,open,high,low,close,volume"
+
+    rs = bs.query_history_k_data_plus(code, fields,
+                                      start_date=start_date,
+                                      end_date=end_date,
+                                      frequency="60",
+                                      adjustflag=adjustflag)
+
+    if rs.error_code != '0':
+        logger.error(f"获取K线数据失败: {rs.error_msg}")
+        return None
+
+    data_list = []
+    while (rs.error_code == '0') & rs.next():
+        data_list.append(rs.get_row_data())
+
+    if not data_list:
+        logger.warning(f"{code} 在指定时间段没有数据")
+        return None
+
+    df = pd.DataFrame(data_list, columns=rs.fields)
+
+    # 将能转换成数值的列都转换成数值类型
+    numeric_cols = []
+    for col in df.columns[1:]:
+        df[col] = pd.to_numeric(df[col])
+        numeric_cols.append(col)
+    df[numeric_cols] = df[numeric_cols].infer_objects(copy=False)
+    df[numeric_cols] = df[numeric_cols].interpolate(method='linear', limit_direction='both')
+    # 3. 使用 ffill 和 bfill 替代 fillna(method=...)
+    df[numeric_cols] = df[numeric_cols].ffill().bfill()
+
+    logger.info(f"获取到 {len(df)} 条分钟K线数据")
+    return df
+
+def get_table_info_from_db(conn, cursor):
+    """获取数据库中已存在的K线数据表信息"""  
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND (name LIKE 'daily_%' OR name LIKE 'minute60_%')")
+    # cursor
+    tables = cursor.fetchall()
+    tables = [table[0] for table in tables]
+    table_info = {}
+    for table in tables:
+        table_name = table
+        # 解析表名 line_code_startdate_enddate
+        parts = table_name.split('_')
+        if len(parts) == 6:
+            freq = parts[0]
+            code = parts[1]
+            name = parts[2]
+            start_date = parts[3]
+            end_date = parts[4]
+            lens = parts[5]
+            table_info[code] = {
+                'freq': freq,
+                'table_name': table_name,
+                'name': name,
+                'start_date': start_date,
+                'end_date': end_date,
+                'length': lens
+            }
+    return table_info
+
+def save_kline_to_db(conn, cursor, prefix, code, name, df, start_date, end_date):
+    """保存K线数据到数据库"""
+    if df is None or df.empty:
+        logger.warning(f"{code} 没有数据可保存")
+        return None
+    
+    # 格式化日期为YYYYMMDD格式用于表名
+    start_date_fmt = start_date.replace('-', '')
+    end_date_fmt = end_date.replace('-', '')
+    
+    # 表名格式：line_code_startdate_enddate
+    table_name = f"{prefix}_{code.replace('.', '')}_{name}_{start_date_fmt}_{end_date_fmt}_{len(df)}"
+    
+    df.to_sql(table_name, conn, if_exists='replace', index=False)
+    
+    logger.info(f"已将 {code} 的 {len(df)} 条K线数据保存到表 {table_name}")
+    return table_name
+
+@with_db_connection
+def get_all_stocks_latest_data(conn, cursor, freq='daily', length=30):
     """
-    从代理列表中随机选择一个代理并转换为 HTTP/HTTPS 格式。
-    :param proxies: 代理列表
-    :return: HTTP/HTTPS 格式的代理字典
+    从数据库中读取所有股票的最后length行数据
+    
+    参数:
+        freq: 数据频率，'daily' 或 'minute60'
+        length: 要读取的最后几行数据
+    
+    返回:
+        dict: {股票代码: DataFrame} 格式的字典
     """
-    import random
-    selected_proxy = random.choice(proxies)
-    proxy_url = f"http://{selected_proxy['server']}:{selected_proxy['port']}"
-    return {
-        "http": proxy_url,
-        "https": proxy_url
-    }
-
-def initialize_data():
-    """
-    初始化股票数据，获取 A 股现货数据并划分为不同板块，保存到 SQLite 数据库。
-    """
-    # 设置 Pandas 显示选项，确保打印时不截断
-    pd.set_option('display.max_rows', None)  # 显示所有行
-
-    stock_zh_a_spot_em_df = ak.stock_zh_a_spot_em()
-
-    # 过滤掉“名称”列包含 ST 或 PT 以及退市的股票
-    filtered_df = stock_zh_a_spot_em_df[~stock_zh_a_spot_em_df['名称'].str.contains('ST|PT|退|转', na=False)]
-
-    # 去掉代码列以 900、689 和 200 开头的行
-    filtered_df = filtered_df[~filtered_df['代码'].str.startswith(('900', '689', '200'))]
-
-    # 划分不同板块
-    main_board_df = filtered_df[filtered_df['代码'].str.startswith(('60', '00'))]  # 主板
-    science_board_df = filtered_df[filtered_df['代码'].str.startswith('688')]      # 科创板
-    growth_board_df = filtered_df[filtered_df['代码'].str.startswith('30')]        # 创业板
-    beijing_board_df = filtered_df[filtered_df['代码'].str.startswith(('83', '87', '430', '92'))]  # 北交所
-
-    # 检查未划分的行
-    remaining_df = filtered_df[
-        ~filtered_df['代码'].str.startswith(('60', '00', '688', '30', '83', '87', '430', '92'))
-    ]
-
-    # 使用 assert 确保未划分的表没有行
-    assert remaining_df.empty, "存在未划分的股票，请检查过滤条件！"
-
-    # 将每个 DataFrame 保存为单独的表
-    main_board_df.to_sql('main_board', conn, if_exists='replace', index=False)
-    science_board_df.to_sql('science_board', conn, if_exists='replace', index=False)
-    growth_board_df.to_sql('growth_board', conn, if_exists='replace', index=False)
-    beijing_board_df.to_sql('beijing_board', conn, if_exists='replace', index=False)
-
-    print("数据已保存到 SQLite 数据库 'stock_data.db'")
-
-
-def get_trade_date():
-    tool_trade_date_hist_sina_df = ak.tool_trade_date_hist_sina()
-    return tool_trade_date_hist_sina_df
-
-
-def get_start_to_end_date(n=180):
-    '''
-    获取最近 n 天的交易日期范围
-    :param n: 最近天数，默认为 180 天
-    :return: 最近 n 天的交易日期范围，格式为 'YYYY-MM-DD'
-    '''
-    today = (datetime.today() - timedelta(days=0)).strftime('%Y%m%d')  # 获取今天日期
-    start_date = (datetime.today() - timedelta(days=n)).strftime('%Y%m%d')  # 获取 n 天前的日期
-    return start_date, today
-
-
-def fetch_history_stock_data_from_multiple_sources(symbol, period, start_date, end_date, adjust):
-    """
-    从多个接口随机获取股票数据，并计算振幅。
-    随机选择 efinance、akshare、baostock 或 adata 进行数据获取，并支持代理。
-    :param symbol: 股票代码
-    :param period: 数据周期
-    :param start_date: 起始日期
-    :param end_date: 结束日期
-    :param adjust: 调整方式
-    :return: 股票数据 DataFrame
-    """
-    # 映射字典
-    ak_to_ef_period = {
-        'daily': 101,
-        'weekly': 102,
-        'monthly': 103
-    }
-    ak_to_ef_fqt = {
-        'none': 0,
-        'qfq': 1,
-        'hfq': 2
-    }
-    ak_to_bao_period = {
-        'hfq': 1,
-        'qfq': 2,
-        'none': 3
-    }
-    ak_to_ad_period = {'daily': 1, 'weekly': 2, 'monthly': 3}
-    ak_to_ad_fqt = {
-        'none': 0,
-        'qfq': 1,
-        'hfq': 2
-    }
-    adjustflag = str(ak_to_bao_period.get(adjust, 2))
-    period_map = {'daily': 'd', 'weekly': 'w', 'monthly': 'm'}
-    bao_frequency = period_map.get(period, 'd')
-
-    # 定义接口列表
-    interfaces = ["baostock"]
-
-    # 随机选择一个接口
-    selected_interface = random.choice(interfaces)
-
-    # 定义代理列表（示例代理）
-    proxy_list = [
-        '27.189.133.114'
-    ]
-
-    # 随机选择一个代理
-    selected_proxy = random.choice(proxy_list)
-
-    if selected_interface == "efinance":
+    # 获取数据库中指定频率的所有表信息
+    existing_tables = get_table_info_from_db(conn, cursor)
+    freq_tables = {k: v for k, v in existing_tables.items() if v['freq'] == freq}
+    
+    if not freq_tables:
+        logger.warning(f"数据库中没有找到 {freq} 频率的数据表")
+        return {}
+    
+    logger.info(f"开始读取 {len(freq_tables)} 只股票的最后 {length} 行 {freq} 数据")
+    
+    stock_data = {}
+    success_count = 0
+    fail_count = 0
+    
+    for i, (code_clean, table_info) in enumerate(freq_tables.items()):
+        table_name = table_info['table_name']
+        stock_name = table_info['name']
+        
         try:
-            klt = ak_to_ef_period.get(period, 101)
-            fqt = ak_to_ef_fqt.get(adjust, 1)
-            session = requests.Session()
-            session.headers.update({"User-Agent": USER_AGENT})
-            session.proxies.update({
-                "http": f"http://{selected_proxy}",
-                "https": f"http://{selected_proxy}"
-            })
-            efinance.stock.session = session
-            df = efinance.stock.get_quote_history(
-                symbol, beg=start_date, end=end_date, klt=klt, fqt=fqt
-            )
-            print(f"使用 efinance 获取数据 {symbol} {start_date}-{end_date}，代理：{selected_proxy}")
-            return check_data(df)
+            # 构造查询语句，获取最后length行数据
+            query = f"""
+            SELECT * FROM {table_name} 
+            ORDER BY date DESC 
+            LIMIT {length}
+            """
+            
+            df = pd.read_sql_query(query, conn)
+            
+            if df.empty:
+                logger.warning(f"[{i+1}/{len(freq_tables)}] {code_clean} 表 {table_name} 中没有数据")
+                fail_count += 1
+                continue
+            
+            # 按日期正序排列（因为我们用的是DESC，需要反转）
+            df = df.sort_values('date').reset_index(drop=True)
+            
+            # 使用原始股票代码作为key（添加交易所前缀）
+            original_code = restore_stock_code(code_clean)
+            stock_data[original_code] = {
+                'code': original_code,
+                'name': stock_name,
+                'data': df
+            }
+            
+            logger.info(f"[{i+1}/{len(freq_tables)}] {original_code} ({stock_name}) 读取成功，获得 {len(df)} 行数据")
+            success_count += 1
+            
         except Exception as e:
-            print(f"efinance 获取失败: {e}")
-
-    if selected_interface == "akshare":
-        try:
-            os.environ["HTTP_PROXY"] = f"http://{selected_proxy}"
-            os.environ["HTTPS_PROXY"] = f"http://{selected_proxy}"
-            df = ak.stock_zh_a_hist(
-                symbol=symbol, period=period, start_date=start_date, end_date=end_date, adjust=adjust
-            )
-            print(f"使用 akshare 获取数据 {symbol} {start_date}-{end_date}，代理：{selected_proxy}")
-            return check_data(df)
-        except Exception as e:
-            print(f"akshare 获取失败: {e}")
-
-    if selected_interface == "baostock":
-        try:
-            exchange = map_exchange_by_code(symbol)
-            if exchange == 'sh':
-                bao_code = f"sh.{symbol}"
-            elif exchange == 'sz':
-                bao_code = f"sz.{symbol}"
-            else:
-                print(f"跳过非沪深股票: {symbol}")
-                return pd.DataFrame()  # 返回空表
-            bs.login()
-            rs = bs.query_history_k_data_plus(
-                bao_code,
-                "date,open,high,low,close,volume,amount,turn,pctChg",
-                start_date=start_date[:4] + '-' + start_date[4:6] + '-' + start_date[6:],
-                end_date=end_date[:4] + '-' + end_date[4:6] + '-' + end_date[6:],
-                frequency=bao_frequency,
-                adjustflag=adjustflag
-            )
-            data_list = []
-            while (rs.error_code == '0') & rs.next():
-                data_list.append(rs.get_row_data())
-            bs.logout()
-            columns = ['日期', '开盘', '最高', '最低', '收盘', '成交量', '成交额', '换手率', '涨跌幅']
-            df = pd.DataFrame(data_list, columns=columns)
-            for col in ['开盘', '最高', '最低', '收盘', '成交量', '成交额', '换手率', '涨跌幅']:
-                df[col] = pd.to_numeric(df[col], errors='coerce')
-
-            # 动态计算振幅
-            df['振幅'] = ((df['最高'] - df['最低']) / df['收盘'].shift(1)) * 100
-
-            print(f"使用 baostock 获取数据并计算振幅 {symbol} {start_date}-{end_date}，代理：{selected_proxy}")
-            return check_data(df)
-        except Exception as e:
-            print(f"baostock 获取失败: {e}")
-
-    if selected_interface == "adata":
-
-        # 设置代理
-        ad.proxy(is_proxy=True, ip=selected_proxy)
-
-        k_type = ak_to_ad_period.get(period, 1)
-        adjust_type = ak_to_ad_fqt.get(adjust, 1)
-        df = ad.stock.market.get_market(
-            stock_code=symbol, start_date=start_date, k_type=k_type, adjust_type=adjust_type
-        )
-        if df.empty:
-            print(f"adata 获取数据失败，返回空表: {symbol} {start_date}-{end_date}")
-            return pd.DataFrame()
-        print(f"使用 adata 获取数据 {symbol} {start_date}-{end_date}，代理：{selected_proxy}")
-        return check_data(df)
-
-    # 如果所有接口都失败，返回空表
-    print(f"无法获取数据 {symbol} {start_date}-{end_date}")
-    return pd.DataFrame()
-
-
-def get_stock_zh_a_hist(symbol="000001", period="daily", start_date="20180301", end_date="20240528", adjust="qfq"):
-    """
-    获取 A 股历史数据，优先使用 efinance，避免重复调用接口。
-    如果数据库中存在对应表，则直接读取；否则调用 fetch_history_stock_data_from_multiple_sources 获取数据并存储。
-    :param symbol: 股票代码，默认为 000001
-    :param period: 数据周期，默认为 daily
-    :param start_date: 起始日期，格式为 'YYYYMMDD'
-    :param end_date: 结束日期，格式为 'YYYYMMDD'
-    :param adjust: 调整方式，默认为前复权（qfq），可选值为 'qfq'、'hfq'、'none'
-    :return: A 股历史数据 DataFrame
-    """
-    table_name = f"tbl_{symbol}_{period}_{adjust}_{start_date}_{end_date}"
-
-    cursor = conn.cursor()
-    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table_name,))
-    exists = cursor.fetchone()
-
-    if exists:
-        stock_zh_a_hist_df = pd.read_sql(f'SELECT * FROM "{table_name}"', conn)
-        print(f"从数据库中读取表 {table_name}")
-    else:
-        # 调用新方法获取数据
-        stock_zh_a_hist_df = fetch_history_stock_data_from_multiple_sources(symbol, period, start_date, end_date, adjust)
-        if stock_zh_a_hist_df.empty:
-            return pd.DataFrame()  # 返回空表
-        # 删除以 {symbol}_{period}_{adjust} 开头的旧表
-        prefix = f"tbl_{symbol}_{period}_{adjust}_"
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE ?", (f"{prefix}%",))
-        old_tables = cursor.fetchall()
-        for old_table in old_tables:
-            cursor.execute(f'DROP TABLE IF EXISTS "{old_table[0]}"')
-            print(f"删除旧表: {old_table[0]}")
-
-        # 存储到数据库
-        stock_zh_a_hist_df.to_sql(table_name, conn, if_exists="replace", index=False)
-        print(f"获取数据并存储到表 {table_name}")
-
-    return stock_zh_a_hist_df
-
-def get_stock_zh_a_hist_batch(params_list):
-    """
-    批量获取 A 股历史数据，优先使用数据库中已存在的表。
-    如果数据库中不存在对应表，则调用 fetch_batch_kline_data_with_baostock 批量获取数据。
-    保留原来的删除旧表操作。
-    :param params_list: 参数列表，每个元素是一个字典，包含以下键：
-        - symbol: 股票代码
-        - period: 数据周期
-        - start_date: 起始日期，格式为 'YYYYMMDD'
-        - end_date: 结束日期，格式为 'YYYYMMDD'
-        - adjust: 调整方式，可选值为 'qfq'、'hfq'、'none'
-    :return: 一个列表，包含 (PARAM, DF) 元组
-    """
-    table_name_list = []
-    existing_data = []
-    fetch_list = []
-
-    # 生成 table_name_list 并检查哪些表已存在
-    cursor = conn.cursor()
-    for params in params_list:
-        symbol = params["symbol"]
-        period = params["period"]
-        start_date = params["start_date"]
-        end_date = params["end_date"]
-        adjust = params["adjust"]
-
-        table_name = f"tbl_{symbol}_{period}_{adjust}_{start_date}_{end_date}"
-        table_name_list.append(table_name)
-
-        # 检查表是否存在
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table_name,))
-        exists = cursor.fetchone()
-        if exists:
-            # 如果表存在，直接读取数据
-            stock_zh_a_hist_df = pd.read_sql(f'SELECT * FROM "{table_name}"', conn)
-            print(f"从数据库中读取表 {table_name}")
-            existing_data.append((params, stock_zh_a_hist_df))
-        else:
-            # 如果表不存在，加入需要重新爬取的列表
-            fetch_list.append(params)
-
-    # 如果没有需要重新爬取的数据，直接返回
-    if not fetch_list:
-        return existing_data
-
-    # 删除旧表
-    for params in fetch_list:
-        symbol = params["symbol"]
-        period = params["period"]
-        adjust = params["adjust"]
-        prefix = f"tbl_{symbol}_{period}_{adjust}_"
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE ?", (f"{prefix}%",))
-        old_tables = cursor.fetchall()
-        for old_table in old_tables:
-            cursor.execute(f'DROP TABLE IF EXISTS "{old_table[0]}"')
-            print(f"删除旧表: {old_table[0]}")
-
-    # 批量爬取数据
-    fetched_data = fetch_batch_kline_data_with_baostock(fetch_list)
-
-    # 批量存储数据到数据库
-    for params, df in fetched_data:
-        symbol = params["symbol"]
-        period = params["period"]
-        start_date = params["start_date"]
-        end_date = params["end_date"]
-        adjust = params["adjust"]
-
-        table_name = f"tbl_{symbol}_{period}_{adjust}_{start_date}_{end_date}"
-        df.to_sql(table_name, conn, if_exists="replace", index=False)
-        print(f"获取数据并存储到表 {table_name}")
-
-    # 合并已存在的数据和新爬取的数据
-    return existing_data + fetched_data
-
-def fetch_batch_kline_data_with_baostock(params_list):
-    """
-    使用 baostock 批量获取 K 线数据。
-    :param params_list: 参数列表，每个元素是一个字典，包含以下键：
-        - symbol: 股票代码
-        - period: 数据周期
-        - start_date: 起始日期，格式为 'YYYYMMDD'
-        - end_date: 结束日期，格式为 'YYYYMMDD'
-        - adjust: 调整方式，可选值为 'qfq'、'hfq'、'none'
-    :return: 一个列表，包含 (PARAM, DF) 元组
-    """
-    fetched_data = []
-    bs.login()  # 登录 baostock
-
-    for params in params_list:
-        symbol = params["symbol"]
-        period = params["period"]
-        start_date = params["start_date"]
-        end_date = params["end_date"]
-        adjust = params["adjust"]
-
-        # 映射周期和复权方式
-        period_map = {'daily': 'd', 'weekly': 'w', 'monthly': 'm'}
-        bao_frequency = period_map.get(period, 'd')
-        adjustflag = {'none': '3', 'qfq': '2', 'hfq': '1'}.get(adjust, '2')
-
-        # 映射股票代码到 baostock 格式
-        exchange = map_exchange_by_code(symbol)
-        if exchange == 'sh':
-            bao_code = f"sh.{symbol}"
-        elif exchange == 'sz':
-            bao_code = f"sz.{symbol}"
-        else:
-            print(f"跳过非沪深股票: {symbol}")
+            logger.error(f"[{i+1}/{len(freq_tables)}] {code_clean} 读取数据失败: {str(e)}")
+            fail_count += 1
             continue
-
-        # 获取 K 线数据
-        rs = bs.query_history_k_data_plus(
-            bao_code,
-            "date,open,high,low,close,volume,amount,turn,pctChg",
-            start_date=start_date[:4] + '-' + start_date[4:6] + '-' + start_date[6:],
-            end_date=end_date[:4] + '-' + end_date[4:6] + '-' + end_date[6:],
-            frequency=bao_frequency,
-            adjustflag=adjustflag
-        )
-
-        data_list = []
-        while (rs.error_code == '0') & rs.next():
-            data_list.append(rs.get_row_data())
-
-        # 转换为 DataFrame
-        columns = ['日期', '开盘', '最高', '最低', '收盘', '成交量', '成交额', '换手率', '涨跌幅']
-        df = pd.DataFrame(data_list, columns=columns)
-        for col in ['开盘', '最高', '最低', '收盘', '成交量', '成交额', '换手率', '涨跌幅']:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-
-        # 动态计算振幅
-        df['振幅'] = ((df['最高'] - df['最低']) / df['收盘'].shift(1)) * 100
-
-        # 去掉第一行 NaN
-        df = df.dropna(subset=['振幅','涨跌幅'])
-
-        # 去掉满足条件的行（开盘=最高=收盘=最低，且成交量、成交额、换手率均为 NaN）
-        df = df[~((df['开盘'] == df['最高']) & 
-                  (df['开盘'] == df['收盘']) & 
-                  (df['开盘'] == df['最低']) & 
-                  df[['成交量', '成交额', '换手率']].isnull().all(axis=1))]
-
-        print(f"使用 baostock 获取数据 {symbol} {start_date}-{end_date}")
-            # 将能转换成数值的列都转换成数值类型
-        numeric_cols = []
-        for col in df.columns[1:]:
-            df[col] = pd.to_numeric(df[col])
-            numeric_cols.append(col)
-        df[numeric_cols] = df[numeric_cols].infer_objects(copy=False)
-        df[numeric_cols] = df[numeric_cols].interpolate(method='linear', limit_direction='both')
-        # 3. 使用 ffill 和 bfill 替代 fillna(method=...)
-        df[numeric_cols] = df[numeric_cols].ffill().bfill()
-        fetched_data.append((params, df))
-
-    bs.logout()  # 登出 baostock
-    return fetched_data
-
-def read_main_board():
-    """
-    读取主板表中的代码、名称和总市值，并返回一个元组列表。
-    :return: 主板表中的代码、名称和总市值组成的元组列表 [(代码, 名称, 总市值), ...]
-    """
-    cursor = conn.cursor()
-
-    # 检查主板表是否存在
-    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='main_board'")
-    exists = cursor.fetchone()
-    if not exists:
-        raise ValueError("主板表不存在，请确保数据库已正确初始化！")
-
-    # 读取主板表中的代码、名称和总市值
-    cursor.execute("SELECT 代码, 名称, 总市值 FROM main_board")
-    rows = cursor.fetchall()
     
-    # 返回元组列表
-    return rows
+    logger.info(f"数据读取完成: 成功 {success_count}, 失败 {fail_count}")
+    return stock_data
 
-def read_growth_board():
+def restore_stock_code(code_clean):
     """
-    读取创业板表中的代码、名称和总市值，并返回一个元组列表。
-    :return: 创业板表中的代码、名称和总市值组成的元组列表 [(代码, 名称, 总市值), ...]
-    """
-    cursor = conn.cursor()
-
-    # 检查创业板表是否存在
-    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='growth_board'")
-    exists = cursor.fetchone()
-    if not exists:
-        raise ValueError("创业板表不存在，请确保数据库已正确初始化！")
-
-    # 读取创业板表中的代码、名称和总市值
-    cursor.execute("SELECT 代码, 名称, 总市值 FROM growth_board")
-    rows = cursor.fetchall()
+    将清理后的股票代码还原为原始格式
     
-    # 返回元组列表
-    return rows
-
-def map_exchange_by_code(stock_code):
+    参数:
+        code_clean: 清理后的代码，如 'sh600000', 'sz000001'
+    
+    返回:
+        str: 原始格式的股票代码，如 'sh.600000', 'sz.000001'
     """
-    根据股票代码映射交易所。
-    :param stock_code: 股票代码
-    :return: 交易所代码 ('sh', 'sz', 'bj', 'hk')
-    """
-    if stock_code.startswith('6'):
-        return 'sh'
-    elif stock_code.startswith(('0', '3')):
-        return 'sz'
-    elif stock_code.startswith(('9', '8', '4')):
-        return 'bj'
-    elif len(stock_code) == 5:
-        return 'hk'
+    if code_clean.startswith('sh'):
+        return f"{code_clean[2:]}.SH"
+    elif code_clean.startswith('sz'):
+        return f"{code_clean[2:]}.SZ"
     else:
-        raise ValueError(f"无法映射交易所，未知代码格式: {stock_code}")
+        # 如果格式不符合预期，返回原值
+        return code_clean
 
+@with_db_connection
+def get_specific_stocks_latest_data(conn, cursor, stock_codes, freq='daily', length=30):
+    """
+    从数据库中读取指定股票的最后length行数据
+    
+    参数:
+        stock_codes: 股票代码列表，如 ['sh.600000', 'sz.000001']
+        freq: 数据频率，'daily' 或 'minute60'
+        length: 要读取的最后几行数据
+    
+    返回:
+        dict: {股票代码: DataFrame} 格式的字典
+    """
+    # 获取数据库中指定频率的所有表信息
+    existing_tables = get_table_info_from_db(conn, cursor)
+    freq_tables = {k: v for k, v in existing_tables.items() if v['freq'] == freq}
+    
+    if not freq_tables:
+        logger.warning(f"数据库中没有找到 {freq} 频率的数据表")
+        return {}
+    
+    logger.info(f"开始读取 {len(stock_codes)} 只指定股票的最后 {length} 行 {freq} 数据")
+    
+    stock_data = {}
+    success_count = 0
+    fail_count = 0
+    
+    for i, stock_code in enumerate(stock_codes):
+        # 将股票代码转换为数据库中的格式
+        code_clean = stock_code.replace('.', '')
+        
+        if code_clean not in freq_tables:
+            logger.warning(f"[{i+1}/{len(stock_codes)}] {stock_code} 在数据库中未找到对应的 {freq} 数据表")
+            fail_count += 1
+            continue
+        
+        table_info = freq_tables[code_clean]
+        table_name = table_info['table_name']
+        stock_name = table_info['name']
+        
+        try:
+            # 构造查询语句，获取最后length行数据
+            query = f"""
+            SELECT * FROM {table_name} 
+            ORDER BY date DESC 
+            LIMIT {length}
+            """
+            
+            df = pd.read_sql_query(query, conn)
+            
+            if df.empty:
+                logger.warning(f"[{i+1}/{len(stock_codes)}] {stock_code} 表 {table_name} 中没有数据")
+                fail_count += 1
+                continue
+            
+            # 按日期正序排列
+            df = df.sort_values('date').reset_index(drop=True)
+            
+            stock_data[stock_code] = {
+                'code': stock_code,
+                'name': stock_name,
+                'data': df
+            }
+            
+            logger.info(f"[{i+1}/{len(stock_codes)}] {stock_code} ({stock_name}) 读取成功，获得 {len(df)} 行数据")
+            success_count += 1
+            
+        except Exception as e:
+            logger.error(f"[{i+1}/{len(stock_codes)}] {stock_code} 读取数据失败: {str(e)}")
+            fail_count += 1
+            continue
+    
+    logger.info(f"指定股票数据读取完成: 成功 {success_count}, 失败 {fail_count}")
+    return stock_data
+
+def get_stock_data_summary(freq='daily'):
+    """
+    获取数据库中股票数据的概要信息
+    
+    参数:
+        freq: 数据频率，'daily' 或 'minute60'
+    
+    返回:
+        dict: 包含股票数量、日期范围等信息的字典
+    """
+    @with_db_connection
+    def _get_summary(conn, cursor):
+        existing_tables = get_table_info_from_db(conn, cursor)
+        freq_tables = {k: v for k, v in existing_tables.items() if v['freq'] == freq}
+        
+        if not freq_tables:
+            return {'stock_count': 0, 'date_range': None}
+        
+        # 统计信息
+        stock_count = len(freq_tables)
+        start_dates = []
+        end_dates = []
+        
+        for table_info in freq_tables.values():
+            start_date = table_info['start_date']
+            end_date = table_info['end_date']
+            
+            # 转换日期格式
+            start_date_formatted = f"{start_date[:4]}-{start_date[4:6]}-{start_date[6:8]}"
+            end_date_formatted = f"{end_date[:4]}-{end_date[4:6]}-{end_date[6:8]}"
+            
+            start_dates.append(start_date_formatted)
+            end_dates.append(end_date_formatted)
+        
+        return {
+            'stock_count': stock_count,
+            'earliest_start_date': min(start_dates) if start_dates else None,
+            'latest_end_date': max(end_dates) if end_dates else None,
+            'date_range': f"{min(start_dates)} 至 {max(end_dates)}" if start_dates else None
+        }
+    
+    return _get_summary()
+
+@with_db_connection
+@bs_login_required
+def update_stock_kline(conn, cursor, freq='daily', codes=None, force_update=False, process=False, max_stocks=None):
+    """更新股票K线数据
+
+    参数:
+        codes: 要更新的股票代码列表，默认为None表示更新所有A股
+        force_update: 是否强制更新所有数据，默认False只更新新数据
+    """
+    # 获取最新的交易日作为today
+    trade_dates = fetch_trade_dates()
+    if trade_dates is None or trade_dates.empty:
+        logger.error("无法获取交易日数据")
+        return
+    today = trade_dates.iloc[-1]
+    
+    # 获取数据库中已有的表信息
+    existing_tables = get_table_info_from_db(conn, cursor)
+    existing_tables = {k: v for k, v in existing_tables.items() if v['freq'] == freq}
+
+    # 如果没有指定股票代码，则获取所有A股
+    if codes is None:
+        codes, names = fetch_stock_list()
+        if codes is None:
+            logger.error("无法获取股票列表，更新失败")
+            return
+    if max_stocks is not None:
+        codes = codes[:max_stocks]
+        names = names[:max_stocks]
+    total_stocks = len(codes)
+    logger.info(f"开始更新 {total_stocks} 只股票的K线数据")
+    
+    success_count = 0
+    fail_count = 0
+    skip_count = 0
+
+    for i, (code, name) in enumerate(zip(codes, names)):
+        
+        code_clean = code.replace('.', '')
+            
+        # 检查是否已存在该股票的数据表
+        if code_clean in existing_tables.keys() and not force_update:
+            existing_info = existing_tables[code_clean]
+            existing_end_date = existing_info['end_date']
+                
+            # 将YYYYMMDD格式转换为YYYY-MM-DD
+            formatted_end_date = f"{existing_end_date[:4]}-{existing_end_date[4:6]}-{existing_end_date[6:8]}"
+                
+            # 如果已有数据的结束日期是今天，则跳过
+            if formatted_end_date == today:
+                logger.info(f"[{i+1}/{total_stocks}] {code} 数据已是最新，跳过")
+                skip_count += 1
+                continue
+                
+            # 获取从已有数据结束日期到今天的新数据
+            if freq == 'daily':
+                df = fetch_daily_kline(code, start_date=formatted_end_date, end_date=today)
+            elif freq == 'minute60':
+                df = fetch_minute60_kline(code, start_date=formatted_end_date, end_date=today)
+
+            if df is not None and not df.empty:
+                # 读取已有数据
+                existing_df = pd.read_sql_query(f"SELECT * FROM {existing_info['table_name']}", conn)
+                    
+                # 合并新旧数据，去重
+                merged_df = pd.concat([existing_df, df]).drop_duplicates(subset=['date'], keep='last')
+                    
+                # 获取合并后的数据范围
+                new_start_date = merged_df['date'].min()
+                new_end_date = merged_df['date'].max()
+                    
+                # 保存合并后的数据，并使用新的表名
+                save_kline_to_db(conn, cursor, freq, code, name, merged_df, new_start_date, new_end_date)
+
+                cursor.execute(f"DROP TABLE IF EXISTS {existing_info['table_name']}")
+                    
+                logger.info(f"[{i+1}/{total_stocks}] {code} 数据更新成功，从 {existing_end_date} 更新到 {new_end_date.replace('-', '')}")
+                success_count += 1
+            else:
+                logger.warning(f"[{i+1}/{total_stocks}] {code} 无法获取新数据")
+                fail_count += 1
+        else:
+            start_date = (datetime.datetime.now() - datetime.timedelta(days=30)).strftime('%Y-%m-%d')
+            df = fetch_daily_kline(code, start_date=start_date, end_date=today)
+            if df is not None and not df.empty:
+                # 保存数据到数据库
+                save_kline_to_db(conn, cursor, code, name, df, start_date, today)
+                logger.info(f"[{i+1}/{total_stocks}] {code} 新增数据成功")
+                success_count += 1
+            else:
+                logger.warning(f"[{i+1}/{total_stocks}] {code} 无法获取数据")
+                fail_count += 1
+    
+    logger.info(f"K线数据更新完成: 成功 {success_count}, 失败 {fail_count}, 跳过 {skip_count}")
 
 if __name__ == "__main__":
-    initialize_data()
+    # rs = fetch_stock_list()
+    # print(rs)
+    # print(fetch_trade_dates())
+    # update_stock_daily_kline(process=True,force_update=False)
+    print(DB_PATH)

@@ -5,36 +5,10 @@ import sys
 import numpy as np
 from scipy import stats
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-from init import *
-from init.data_prepare import read_main_board, read_growth_board, get_stock_zh_a_hist, get_start_to_end_date, get_stock_zh_a_hist_batch
+from init import get_specific_stocks_latest_data
+# from init.data_prepare import read_main_board, read_growth_board, get_stock_zh_a_hist, get_start_to_end_date, get_stock_zh_a_hist_batch
 
 alpha = 0.5  # 黄金分割率
-
-def filter_zhu_erbo_condition0():
-    """
-    朱二波条件0：
-    使用读取主板和创业板的方法拿到元组列表，并筛选总市值小于 100 亿的元素。
-    对总市值为 None 的元素抛出 Warning，并显示对应的代码和名称。
-    :return: 筛选后的元组列表 [(代码, 名称, 总市值), ...]
-    """
-    # 调用读取主板和创业板的方法
-    main_board_data = read_main_board()
-    growth_board_data = read_growth_board()
-
-    # 合并主板和创业板数据
-    all_board_data = main_board_data + growth_board_data
-
-    # 筛选总市值小于 100 亿的元素，并对 None 值抛出 Warning
-    filtered_data = []
-    for row in all_board_data:
-        if row[2] is None:
-            warnings.warn(f"总市值为 None 的元素: 代码={row[0]}, 名称={row[1]}")
-        elif int(row[2]) < 100_000_000_000:
-            filtered_data.append(row)
-        else:
-            filtered_data.append(row)
-    print(f"筛选后的股票数量: {len(filtered_data)}")
-    return filtered_data
 
 def mark_zhu_erbo_condition1(df: pd.DataFrame, window=20):
     """
@@ -462,34 +436,12 @@ def erbo_main_query_mode():
     4. 统计最新一天命中条件数量，按照缩量小阳线天数从多到少排序打印
     5. 将结果存入 result.xlsx 文件
     """
-    # 1. 过滤股票名单
-    filtered_stocks = filter_zhu_erbo_condition0()
-    if not filtered_stocks:
-        print("没有符合条件的股票。")
-        return
+    results=[]
+    df_dict = get_specific_stocks_latest_data()
 
-    # 构造参数列表
-    params_list = []
-    start_date, end_date = get_start_to_end_date(32)
-    for code, name, _ in filtered_stocks:
-        params_list.append({
-            "symbol": code,
-            "period": "daily",
-            "start_date": start_date,
-            "end_date": end_date,
-            "adjust": "qfq"  # 可根据需求调整复权方式
-        })
-
-    # 2. 批量查询最近30天历史行情
-    result_data = get_stock_zh_a_hist_batch(params_list)
-
-    results = []
-    for (params, df), (_, name, _) in zip(result_data, filtered_stocks):
-        code = params["symbol"]
-
-        if df.empty:
-            print(f"{code} {name} 获取数据失败，跳过。")
-            continue
+    for code, name_df in df_dict.items():
+        name = name_df['name']
+        df = name_df['data']
 
         # 3. 应用所有mark方法
         df = mark_zhu_erbo_condition1(df)
