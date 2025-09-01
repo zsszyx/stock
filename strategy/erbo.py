@@ -442,7 +442,24 @@ def erbo_main_query_mode():
     for code, name_df in df_dict.items():
         name = name_df['name']
         df = name_df['data']
-
+        # 替换df的英文列名为中文名（如果需要）
+        column_map = {
+            'open': '开盘',
+            'close': '收盘',
+            'high': '最高',
+            'low': '最低',
+            'volume': '成交量',
+            'pctChg': '涨跌幅',
+            'turn': '换手率'
+        }
+        df = df.rename(columns={k: v for k, v in column_map.items() if k in df.columns})
+        # 利用昨天的收盘价计算振幅（如果没有“振幅”列则补充）
+        if '振幅' not in df.columns:
+            if '最高' in df.columns and '最低' in df.columns and '收盘' in df.columns:
+                df['振幅'] = ((df['最高'] - df['最低']) / df['收盘'].shift(1).replace(0, np.nan)) * 100
+                df['振幅'] = df['振幅'].fillna(0)  # 处理NaN值
+            else:
+                raise ValueError("DataFrame 缺少计算振幅所需的列（最高、最低、收盘）")
         # 3. 应用所有mark方法
         df = mark_zhu_erbo_condition1(df)
         df = mark_consecutive_small_positive(df)

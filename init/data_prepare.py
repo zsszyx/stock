@@ -61,7 +61,7 @@ def bs_login_required(func):
 def fetch_trade_dates(start_date=None, end_date=None):
     """获取交易日数据"""
     if start_date is None:
-        start_date = (datetime.datetime.now() - datetime.timedelta(days=365)).strftime('%Y-%m-%d')
+        start_date = (datetime.datetime.now() - datetime.timedelta(days=30)).strftime('%Y-%m-%d')
     if end_date is None:
         end_date = datetime.datetime.now().strftime('%Y-%m-%d')
     
@@ -87,15 +87,15 @@ def fetch_trade_dates(start_date=None, end_date=None):
 def fetch_stock_list(start_date=None, end_date=None):
     """获取交易日数据"""
     if start_date is None:
-        start_date = (datetime.datetime.now() - datetime.timedelta(days=365)).strftime('%Y-%m-%d')
+        start_date = (datetime.datetime.now() - datetime.timedelta(days=30)).strftime('%Y-%m-%d')
     if end_date is None:
-        end_date = (datetime.datetime.now() - datetime.timedelta(days=5)).strftime('%Y-%m-%d')
+        end_date = (datetime.datetime.now() - datetime.timedelta(days=20)).strftime('%Y-%m-%d')
     
     logger.info(f"获取 {end_date} 的股票列表")
     rs = bs.query_all_stock(end_date)
     df = rs.get_data()
     df = df[~df['code'].str.startswith(('sh.000', 'sz.399'))]
-    df = df[~df['code_name'].str.contains(r'\*|ST|退|S|T|')]
+    df = df[~df['code_name'].str.contains(r'\*|ST|S|退')]
     # df = df[df['code'].str.startswith(('sh.688', 'sz.300'))]  # 科创板和创业板
     logger.info(f"获取到 {len(df)} 只股票信息")
 
@@ -337,7 +337,7 @@ def restore_stock_code(code_clean):
         return code_clean
 
 @with_db_connection
-def get_specific_stocks_latest_data(conn, cursor, stock_codes, freq='daily', length=30):
+def get_specific_stocks_latest_data(conn, cursor, freq='daily', length=30):
     """
     从数据库中读取指定股票的最后length行数据
     
@@ -357,18 +357,19 @@ def get_specific_stocks_latest_data(conn, cursor, stock_codes, freq='daily', len
         logger.warning(f"数据库中没有找到 {freq} 频率的数据表")
         return {}
     
-    logger.info(f"开始读取 {len(stock_codes)} 只指定股票的最后 {length} 行 {freq} 数据")
+    logger.info(f"开始读取 {len(freq_tables)} 只指定股票的最后 {length} 行 {freq} 数据")
     
     stock_data = {}
     success_count = 0
     fail_count = 0
-    
-    for i, stock_code in enumerate(stock_codes):
+
+    for i, (code, _) in enumerate(freq_tables.items()):
         # 将股票代码转换为数据库中的格式
-        code_clean = stock_code.replace('.', '')
+        code_clean = code.replace('.', '')
+
         
         if code_clean not in freq_tables:
-            logger.warning(f"[{i+1}/{len(stock_codes)}] {stock_code} 在数据库中未找到对应的 {freq} 数据表")
+            logger.warning(f"[{i+1}/{len(freq_tables)}] {code_clean} 在数据库中未找到对应的 {freq} 数据表")
             fail_count += 1
             continue
         
@@ -387,72 +388,38 @@ def get_specific_stocks_latest_data(conn, cursor, stock_codes, freq='daily', len
             df = pd.read_sql_query(query, conn)
             
             if df.empty:
-                logger.warning(f"[{i+1}/{len(stock_codes)}] {stock_code} 表 {table_name} 中没有数据")
+                logger.warning(f"[{i+1}/{len(freq_tables)}] {code_clean} 表 {table_name} 中没有数据")
                 fail_count += 1
                 continue
             
             # 按日期正序排列
             df = df.sort_values('date').reset_index(drop=True)
             
-            stock_data[stock_code] = {
-                'code': stock_code,
+            stock_data[code] = {
+                'code': code,
                 'name': stock_name,
                 'data': df
             }
             
-            logger.info(f"[{i+1}/{len(stock_codes)}] {stock_code} ({stock_name}) 读取成功，获得 {len(df)} 行数据")
+            logger.info(f"[{i+1}/{len(freq_tables)}] {code} ({stock_name}) 读取成功，获得 {len(df)} 行数据")
             success_count += 1
             
         except Exception as e:
-            logger.error(f"[{i+1}/{len(stock_codes)}] {stock_code} 读取数据失败: {str(e)}")
+            logger.error(f"[{i+1}/{len(freq_tables)}] {code} 读取数据失败: {str(e)}")
             fail_count += 1
             continue
     
     logger.info(f"指定股票数据读取完成: 成功 {success_count}, 失败 {fail_count}")
     return stock_data
 
-def get_stock_data_summary(freq='daily'):
-    """
-    获取数据库中股票数据的概要信息
-    
-    参数:
-        freq: 数据频率，'daily' 或 'minute60'
-    
-    返回:
-        dict: 包含股票数量、日期范围等信息的字典
-    """
-    @with_db_connection
-    def _get_summary(conn, cursor):
-        existing_tables = get_table_info_from_db(conn, cursor)
-        freq_tables = {k: v for k, v in existing_tables.items() if v['freq'] == freq}
-        
-        if not freq_tables:
-            return {'stock_count': 0, 'date_range': None}
-        
-        # 统计信息
-        stock_count = len(freq_tables)
-        start_dates = []
-        end_dates = []
-        
-        for table_info in freq_tables.values():
-            start_date = table_info['start_date']
-            end_date = table_info['end_date']
-            
-            # 转换日期格式
-            start_date_formatted = f"{start_date[:4]}-{start_date[4:6]}-{start_date[6:8]}"
-            end_date_formatted = f"{end_date[:4]}-{end_date[4:6]}-{end_date[6:8]}"
-            
-            start_dates.append(start_date_formatted)
-            end_dates.append(end_date_formatted)
-        
-        return {
-            'stock_count': stock_count,
-            'earliest_start_date': min(start_dates) if start_dates else None,
-            'latest_end_date': max(end_dates) if end_dates else None,
-            'date_range': f"{min(start_dates)} 至 {max(end_dates)}" if start_dates else None
-        }
-    
-    return _get_summary()
+@with_db_connection
+@bs_login_required
+def get_stock_industry(conn, cursor):
+    """获取股票行业分类数据"""
+    rs = bs.query_stock_industry()
+    rs = rs.get_data()
+    rs.to_sql('stock_industry', conn, if_exists='replace', index=False)
+    return None
 
 @with_db_connection
 @bs_login_required
@@ -463,6 +430,7 @@ def update_stock_kline(conn, cursor, freq='daily', codes=None, force_update=Fals
         codes: 要更新的股票代码列表，默认为None表示更新所有A股
         force_update: 是否强制更新所有数据，默认False只更新新数据
     """
+    assert freq in ['daily', 'minute60'], "频率参数 freq 必须是 'daily' 或 'minute60'"
     # 获取最新的交易日作为today
     trade_dates = fetch_trade_dates()
     if trade_dates is None or trade_dates.empty:
@@ -514,7 +482,7 @@ def update_stock_kline(conn, cursor, freq='daily', codes=None, force_update=Fals
             elif freq == 'minute60':
                 df = fetch_minute60_kline(code, start_date=formatted_end_date, end_date=today)
 
-            if df is not None and not df.empty:
+            if df is not None and not df.empty and len(df) > 1:
                 # 读取已有数据
                 existing_df = pd.read_sql_query(f"SELECT * FROM {existing_info['table_name']}", conn)
                     
@@ -540,7 +508,8 @@ def update_stock_kline(conn, cursor, freq='daily', codes=None, force_update=Fals
             df = fetch_daily_kline(code, start_date=start_date, end_date=today)
             if df is not None and not df.empty:
                 # 保存数据到数据库
-                save_kline_to_db(conn, cursor, code, name, df, start_date, today)
+                save_kline_to_db(conn, cursor, freq, code, name, df, start_date, today)
+
                 logger.info(f"[{i+1}/{total_stocks}] {code} 新增数据成功")
                 success_count += 1
             else:
@@ -554,4 +523,6 @@ if __name__ == "__main__":
     # print(rs)
     # print(fetch_trade_dates())
     # update_stock_daily_kline(process=True,force_update=False)
-    print(DB_PATH)
+    # print(DB_PATH)
+    # update_stock_kline(freq='daily')
+    get_stock_industry()
