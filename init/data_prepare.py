@@ -524,5 +524,5 @@ if __name__ == "__main__":
     # print(fetch_trade_dates())
     # update_stock_daily_kline(process=True,force_update=False)
     # print(DB_PATH)
-    update_stock_kline(freq='daily', force_update=True)
+    update_stock_kline(freq='daily', force_update=False)
     get_stock_industry()

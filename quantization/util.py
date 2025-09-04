@@ -61,9 +61,23 @@ def validate_time_line(df_list):
 def get_industry_data(conn, cusor):
     sql = "select * from stock_industry"
     df = pd.read_sql(sql, conn)
-    return df
+    return df[['code', 'industry']]
 
-def neutralize_features(df_list, cluster_dfs, code_list, feature_names, mask_list, date_col='date'):
+def validate_industry_dummy(industry_cluster=None):
+    if industry_cluster is None:
+        df = get_industry_data()['industry']
+    # df = get_industry_data()['industry']
+    industry_nums = df.nunique()
+    dummy = pd.get_dummies(df, drop_first=True)
+    if dummy.isnull().values.any():
+        logging.warning("Dummy变量中存在缺失值")
+        return False
+    if dummy.shape[1] != industry_nums - 1:
+        logging.warning("Dummy变量的数量不正确")
+        return False
+    return True
+
+def neutralize_features(df_list, cluster_dfs, cluster_names, code_list, feature_names, mask_list, date_col='date'):
 
     """
     通用中性化回归函数
@@ -110,7 +124,8 @@ def neutralize_features(df_list, cluster_dfs, code_list, feature_names, mask_lis
 
     # 处理因子：预处理和中性化
     all_data = process_and_neutralize_factors(
-        all_data, feature_names, mask_list, date_col
+        all_data, cluster_names, feature_names, mask_list, date_col
+
     )
     
     # # 将中性化后的值分拆回原始的df_list
@@ -124,7 +139,7 @@ def neutralize_features(df_list, cluster_dfs, code_list, feature_names, mask_lis
     
     return all_data
 
-def process_and_neutralize_factors(all_data, feature_names, mask_list, date_col):
+def process_and_neutralize_factors(all_data, cluster_names, feature_names, mask_list, date_col):
     """
     处理因子：对次数特征进行百分比排名，并对所有特征进行中性化
     
@@ -140,8 +155,9 @@ def process_and_neutralize_factors(all_data, feature_names, mask_list, date_col)
     
     # 获取分类变量列名（假设分类变量都是数值型或已经转换为虚拟变量）
     # 这里我们假设除了日期、代码和特征列之外的都是分类变量
-    non_feature_cols = [date_col, 'code'] + feature_names
-    cluster_cols = [col for col in all_data.columns if col not in non_feature_cols]
+    cluster_cols = [col for col in cluster_names if col in all_data.columns]
+    if len(cluster_cols) == 0:
+        raise ValueError("没有找到分类变量列，请检查输入数据")
     
     # 对每个特征进行预处理和中性化
     for i, (feature_name, is_count_feature) in enumerate(zip(feature_names, mask_list)):
@@ -165,18 +181,21 @@ def process_and_neutralize_factors(all_data, feature_names, mask_list, date_col)
             logging.info(f"处理日期 {date} 的特征 {feature_name}")
             date_data = all_data[all_data[date_col] == date].copy()
             
-            if len(date_data) < 2 or len(cluster_cols) == 0:
-                raise ValueError(f"日期 {date} 的数据不足以进行回归或没有分类变量")
-                    
+            if len(date_data) < 3000:
+                logging.warning(f"日期 {date} 的数据量: {len(date_data)}，跳过中性化")
+                # neutralized_values.extend(date_data[f"{feature_name}_preprocessed"].values)
+                continue
+            # 
             y = date_data[f"{feature_name}_preprocessed"].values
 
             # 为分类变量创建虚拟变量（one-hot编码）
-            X_dummies = pd.DataFrame()
-            for cluster_col in cluster_cols:
-                # 为每个分类变量创建虚拟变量，并丢弃基准组
-                dummies = pd.get_dummies(date_data[cluster_col], prefix=cluster_col, drop_first=True)
+            # X_dummies = pd.DataFrame()
+            # for cluster_col in cluster_cols:
+            #     # 为每个分类变量创建虚拟变量，并丢弃基准组
+            #     dummies = pd.get_dummies(date_data[cluster_col], prefix=cluster_col, drop_first=True)
         
-                X_dummies = pd.concat([X_dummies, dummies], axis=1)
+            #     X_dummies = pd.concat([X_dummies, dummies], axis=1)
+            X_dummies = pd.get_dummies(date_data[cluster_cols], drop_first=True)
             
             X = X_dummies.values.astype(float)
             
@@ -184,7 +203,8 @@ def process_and_neutralize_factors(all_data, feature_names, mask_list, date_col)
             X = sm.add_constant(X)
             
             # 执行OLS回归
-            logging.info(f"计算日期 {date}，特征 {feature_name} 的回归模型")
+            logging.info(f"计算日期 {date}/长度{len(date_data)}，特征 {feature_name} 的回归模型")
+
             model = sm.OLS(y, X).fit()
             # 获取残差作为中性化后的值
             neutralized_values.extend(model.resid)
@@ -404,9 +424,10 @@ def main():
         df_list.append(df)
     # df_list = alignment_time_line(df_list)
     cluster_dfs = [get_industry_data()]
+    cluster_names = ['industry']
     feature_names = [factor_names[0]]
     mask_list = [True] * len(feature_names)
-    all_data = neutralize_features(df_list, cluster_dfs, code_list, feature_names, mask_list, "date")
+    all_data = neutralize_features(df_list, cluster_dfs, cluster_names, code_list, feature_names, mask_list, "date")
     results = evaluate_neutralized_factors(
         all_data, code_list, [f"{name}_neutral" for name in feature_names], date_col='date', forward_period=5
     )
@@ -419,5 +440,6 @@ def main():
 if __name__ == "__main__":
 #    print(test_neutralize_features())
 #    test_evaluate_neutralized_factors()
-   main()
+#    main()
+   validate_industry_dummy()
 
