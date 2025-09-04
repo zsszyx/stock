@@ -504,7 +504,7 @@ def update_stock_kline(conn, cursor, freq='daily', codes=None, force_update=Fals
                 logger.warning(f"[{i+1}/{total_stocks}] {code} 无法获取新数据")
                 fail_count += 1
         else:
-            start_date = (datetime.datetime.now() - datetime.timedelta(days=30)).strftime('%Y-%m-%d')
+            start_date = (datetime.datetime.now() - datetime.timedelta(days=365)).strftime('%Y-%m-%d')
             df = fetch_daily_kline(code, start_date=start_date, end_date=today)
             if df is not None and not df.empty:
                 # 保存数据到数据库
@@ -524,5 +524,5 @@ if __name__ == "__main__":
     # print(fetch_trade_dates())
     # update_stock_daily_kline(process=True,force_update=False)
     # print(DB_PATH)
-    update_stock_kline(freq='daily')
-    # get_stock_industry()
+    update_stock_kline(freq='daily', force_update=True)
+    get_stock_industry()

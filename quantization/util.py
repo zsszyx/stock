@@ -3,7 +3,23 @@ import numpy as np
 from functools import reduce
 import os 
 import sys
+import logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler("util_main.INFO", encoding="utf-8")
+    ]
+)
+def log_unhandled_exception(exc_type, exc_value, exc_traceback):
+    logging.critical("程序异常退出", exc_info=(exc_type, exc_value, exc_traceback))
+    # 如果是Ctrl+C，也继续调用默认处理
+    if issubclass(exc_type, KeyboardInterrupt):
+        sys.__excepthook__(exc_type, exc_value, exc_traceback)
 
+sys.excepthook = log_unhandled_exception
+logger = logging.getLogger(__name__)
 from sklearn.isotonic import spearmanr
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 from init import with_db_connection
@@ -11,6 +27,10 @@ from sklearn.linear_model import LinearRegression
 from sklearn.preprocessing import StandardScaler
 import statsmodels.api as sm
 from tqdm import tqdm  # 用于显示进度条
+from init import get_specific_stocks_latest_data
+from quantization.factor import factor_names, mark_volume_support
+import atexit
+import traceback
 
 def validate_df_coluns(df_list):
     """
@@ -33,6 +53,7 @@ def validate_time_line(df_list):
     first_df = df_list[0]
     for df in df_list[1:]:
         if not df.index.equals(first_df.index):
+            logging.warning(f"时间线不一致: {first_df.index} vs {df.index}")
             return False
     return True
 
@@ -66,7 +87,7 @@ def neutralize_features(df_list, cluster_dfs, code_list, feature_names, mask_lis
         raise ValueError("feature_names中的名称超出了特征范围")
     
     assert validate_df_coluns(df_list), "df_list中的所有DataFrame列必须相同"
-    assert validate_time_line(df_list), "df_list中的所有DataFrame时间线必须相同"
+    # assert validate_time_line(df_list), "df_list中的所有DataFrame时间线必须相同"
 
     # 获取所有日期和股票代码
     all_dates = sorted(set.union(*[set(df[date_col]) for df in df_list]))
@@ -92,16 +113,16 @@ def neutralize_features(df_list, cluster_dfs, code_list, feature_names, mask_lis
         all_data, feature_names, mask_list, date_col
     )
     
-    # 将中性化后的值分拆回原始的df_list
-    for i, code in enumerate(code_list):
-        stock_data = all_data[all_data['code'] == code].copy()
+    # # 将中性化后的值分拆回原始的df_list
+    # for i, code in enumerate(code_list):
+    #     stock_data = all_data[all_data['code'] == code].copy()
         
-        # 添加中性化后的特征列到原始df
-        for feature_name in feature_names:
-            neutral_col = f"{feature_name}_neutral"
-            df_list[i][f"{feature_name}_neutral"] = stock_data[neutral_col].values
+    #     # 添加中性化后的特征列到原始df
+    #     for feature_name in feature_names:
+    #         neutral_col = f"{feature_name}_neutral"
+    #         df_list[i][f"{feature_name}_neutral"] = stock_data[neutral_col].values
     
-    return df_list
+    return all_data
 
 def process_and_neutralize_factors(all_data, feature_names, mask_list, date_col):
     """
@@ -124,8 +145,8 @@ def process_and_neutralize_factors(all_data, feature_names, mask_list, date_col)
     
     # 对每个特征进行预处理和中性化
     for i, (feature_name, is_count_feature) in enumerate(zip(feature_names, mask_list)):
-        print(f"处理特征 {i+1}/{len(feature_names)}: {feature_name} (类型: {'次数' if is_count_feature else '值'})")
-        
+        # logging.info(f"处理特征 {i+1}/{len(feature_names)}: {feature_name} (类型: {'次数' if is_count_feature else '值'})")
+
         # 对次数特征进行百分比排名处理
         if is_count_feature:
             # 按日期分组计算百分比排名
@@ -140,7 +161,8 @@ def process_and_neutralize_factors(all_data, feature_names, mask_list, date_col)
         neutralized_values = []
         
         # 对每个日期进行处理
-        for date in tqdm(sorted(all_data[date_col].unique()), desc=f"中性化 {feature_name}"):
+        for date in sorted(all_data[date_col].unique()):
+            logging.info(f"处理日期 {date} 的特征 {feature_name}")
             date_data = all_data[all_data[date_col] == date].copy()
             
             if len(date_data) < 2 or len(cluster_cols) == 0:
@@ -162,6 +184,7 @@ def process_and_neutralize_factors(all_data, feature_names, mask_list, date_col)
             X = sm.add_constant(X)
             
             # 执行OLS回归
+            logging.info(f"计算日期 {date}，特征 {feature_name} 的回归模型")
             model = sm.OLS(y, X).fit()
             # 获取残差作为中性化后的值
             neutralized_values.extend(model.resid)
@@ -206,7 +229,7 @@ def test_neutralize_features():
 
     return df_list
 
-def evaluate_neutralized_factors(neutralized_dfs, code_list, feature_names, date_col='date', forward_period=5):
+def evaluate_neutralized_factors(all_data, code_list, feature_names, date_col='date', forward_period=5):
     """
     评估中性化后因子的有效性
     
@@ -221,11 +244,11 @@ def evaluate_neutralized_factors(neutralized_dfs, code_list, feature_names, date
     results = {}
     
     # 1. 合并所有数据以便分析
-    all_data = pd.DataFrame()
-    for i, df in enumerate(neutralized_dfs):
-        df_copy = df.copy()
-        df_copy['code'] = code_list[i]
-        all_data = pd.concat([all_data, df_copy], ignore_index=True)
+    # all_data = pd.DataFrame()
+    # for i, df in enumerate(neutralized_dfs):
+    #     df_copy = df.copy()
+    #     df_copy['code'] = code_list[i]
+    #     all_data = pd.concat([all_data, df_copy], ignore_index=True)
     
     # 2. 使用向量化操作计算未来收益率 (核心改动)
     # 首先确保数据按股票和日期排序
@@ -319,12 +342,82 @@ def test_evaluate_neutralized_factors():
     )
     return results
 
+def alignment_time_line(df_list):
+    """
+    对齐时间线
+    """
+    # 获取所有DataFrame的日期索引的并集
+    logging.info(f"原始时间线: {df_list[0]['date']}")
+
+    all_dates = set()
+    for df in df_list:
+        all_dates.update(df['date'])
+    all_dates = sorted(all_dates)
+
+    # 统计每个日期在多少个df中出现
+    date_counts = {}
+    for date in all_dates:
+        count = sum(date in set(df['date']) for df in df_list)
+        date_counts[date] = count
+
+    # 选择所有df都包含的最大连续日期区间
+    # 先找所有df都包含的日期
+    full_dates = [date for date in all_dates if date_counts[date] == len(df_list)]
+    if not full_dates:
+        raise ValueError("没有所有DataFrame都包含的日期，无法对齐")
+
+    # 找最大连续区间
+    max_seq = []
+    temp_seq = []
+    for i, date in enumerate(full_dates):
+        if not temp_seq:
+            temp_seq = [date]
+        else:
+            prev_date = temp_seq[-1]
+            if (pd.to_datetime(date) - pd.to_datetime(prev_date)).days == 1:
+                temp_seq.append(date)
+            else:
+                if len(temp_seq) > len(max_seq):
+                    max_seq = temp_seq
+                temp_seq = [date]
+    if len(temp_seq) > len(max_seq):
+        max_seq = temp_seq
+
+    # 只保留最大连续区间的日期
+    aligned_dates = set(max_seq)
+    logging.info(f"对齐后的时间线: {sorted(aligned_dates)}")
+    aligned_df_list = []
+    for df in df_list:
+        aligned_df = df[df['date'].isin(aligned_dates)].copy()
+        aligned_df = aligned_df.sort_values('date').reset_index(drop=True)
+        aligned_df_list.append(aligned_df)
+    return aligned_df_list
+
+def main():
+    stock_data = get_specific_stocks_latest_data(length=22)
+    code_list = []
+    df_list = []
+    for num, i in enumerate(stock_data.values()):
+        code_list.append(i['code'])
+        logging.info(f"处理股票 {i['code']},({num}/{len(stock_data)})")
+        df = mark_volume_support(i['data'])
+        df_list.append(df)
+    # df_list = alignment_time_line(df_list)
+    cluster_dfs = [get_industry_data()]
+    feature_names = [factor_names[0]]
+    mask_list = [True] * len(feature_names)
+    all_data = neutralize_features(df_list, cluster_dfs, code_list, feature_names, mask_list, "date")
+    results = evaluate_neutralized_factors(
+        all_data, code_list, [f"{name}_neutral" for name in feature_names], date_col='date', forward_period=5
+    )
+    return results
+
+
+
 
 # 示例使用方式
 if __name__ == "__main__":
 #    print(test_neutralize_features())
-   test_evaluate_neutralized_factors()
-
-
-
+#    test_evaluate_neutralized_factors()
+   main()
 
