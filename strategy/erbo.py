@@ -427,6 +427,107 @@ def mark_wash_trading(df: pd.DataFrame):
 
     return df
 
+def calculate_volume_price_turnover_percentile(df: pd.DataFrame):
+    """
+    计算量价换手分布
+    :param df: 包含股票数据的 DataFrame，必须包含 '成交量' 和 '收盘价' 列。
+    :return: 增加 'volume_price_turnover' 列的 DataFrame。
+     IC均值: 0.0543, IC标准差: 0.1107, IR: 0.4906
+    """
+    # 计算换手率在过去60天所处的分位数
+    window = 60
+    turn_percentile = 1/df['turn'].rolling(window=window).rank(pct=True)
+    turn_percentile = np.log1p(turn_percentile)
+    volume_percentile = 1/df['volume'].rolling(window=window).rank(pct=True)
+    volume_percentile = np.log1p(volume_percentile)
+    close_percentile = 1/df['close'].rolling(window=window).rank(pct=True)
+    close_percentile = np.log1p(close_percentile)
+    # k线实体分布
+    body_percentile = 1/abs(df['close'] - df['open']).rolling(window=window).rank(pct=True)
+    body_percentile = np.log1p(body_percentile)
+    df['volume_price_turn_body'] = turn_percentile * body_percentile * close_percentile * volume_percentile/4
+    df['volume_price_turn_body'] = df['volume_price_turn_body'].rolling(window=10).mean()
+    return df
+
+def calculate_amihud_illiquidity(df, window=21):
+    """
+    计算Amihud非流动性因子
+    
+    参数:
+    price_series: 股价序列 (pd.Series)
+    volume_series: 成交量序列 (pd.Series)，与price_series索引相同
+    window: 滚动窗口大小，默认为21个交易日（约1个月）
+    
+    返回:
+    Amihud因子值序列
+    IC均值: 0.0592, IC标准差: 0.1302, IR: 0.4547
+    """
+    required_columns = ['pctChg', 'amount']
+    for col in required_columns:
+        if col not in df.columns:
+            raise ValueError(f"DataFrame 必须包含 '{col}' 列！")
+    # 计算日收益率
+    daily_returns = df['pctChg']
+    
+    # 计算成交额（假设price_series是收盘价，volume_series是成交量）
+    daily_turnover = df['amount']
+    
+    # 计算日度非流动性：|收益率| / 成交额
+    # 添加一个极小值防止除零错误
+    daily_illiquidity = np.abs(daily_returns) / (daily_turnover + 1e-10)
+    
+    # 计算滚动窗口平均值，并取对数平滑
+    amihud_factor = daily_illiquidity.rolling(window=window).mean()
+    amihud_factor_log = np.log(1 + amihud_factor)
+    df['amihud_illiquidity'] = amihud_factor_log
+    return df
+
+def mark_volume_price_divergence(df: pd.DataFrame):
+    """
+    判断成交量与价格的背离情况：
+    - 如果当天成交量大于前一天，且收盘价小于前一天，则标记 'volume_price_divergence' 列为 1，否则为 0。
+    - 统计 'volume_price_divergence' 列中值为 1 的次数，并记录在 'volume_price_divergence_times' 列中。
+    :param df: 包含股票数据的 DataFrame，必须包含 '成交量' 和 '收盘价' 列。
+    :return: 增加 'volume_price_divergence' 和 'volume_price_divergence_times' 列的 DataFrame。
+    IC均值: -0.0357, IC标准差: 0.1116, IR: -0.3198 no log1p
+    IC均值: -0.0369, IC标准差: 0.1148, IR: -0.3209 with log1p
+    IC均值: -0.0464, IC标准差: 0.1222, IR: -0.3801 mean 10
+     IC均值: -0.0474, IC标准差: 0.1394, IR: -0.3403 ma mean30 mean 10
+    """
+    # 初始化标记列
+    df['volume_price_divergence'] = 0
+
+    close_ma = df['close'].rolling(window=20).mean()
+    volume_ma = df['volume'].rolling(window=20).mean()
+
+    norm_volume = (df['volume'] - volume_ma)/volume_ma
+    norm_close = (df['close'] - close_ma)/close_ma
+
+    df['volume_price_divergence'] = abs(norm_close)/abs(norm_volume)
+    df['volume_price_divergence'] = np.log1p(df['volume_price_divergence'])
+    df['volume_price_divergence'] = np.where(norm_close > 0, df['volume_price_divergence'], -df['volume_price_divergence'])
+    df['volume_price_divergence'] = pd.Series(df['volume_price_divergence']).rolling(window=10).mean()
+    return df
+
+def mark_latest_low_chg(df):
+    # 标记最近五天涨幅都小于5%
+    df['最近5天chg都小于5%'] = 0
+    df.loc[df['pctChg'].abs().rolling(window=5).max() < 5, '最近5天chg都小于5%'] = 1
+    return df
+
+def mark_today_shrink(df):
+    # 标记今天是否为缩量
+    df['今天是否为缩量'] = 0
+    df.loc[df['volume'] < df['volume'].rolling(window=5).mean()*0.8, '今天是否为缩量'] = 1
+    return df
+
+def mark_today_postive(df):
+    # 标记今天是否为阳线
+    df['今天是否为阳线'] = 0
+    df.loc[df['close'] > df['open'], '今天是否为阳线'] = 1
+    return df
+
+
 def erbo_main_query_mode():
     """
     二波主函数-查询模式：
@@ -437,11 +538,13 @@ def erbo_main_query_mode():
     5. 将结果存入 result.xlsx 文件
     """
     results=[]
-    df_dict = get_specific_stocks_latest_data()
+    df_dict = get_specific_stocks_latest_data(length=100)
 
     for code, name_df in df_dict.items():
         name = name_df['name']
         df = name_df['data']
+        if 'amount' not in df.columns:
+            continue
         # 替换df的英文列名为中文名（如果需要）
         column_map = {
             'open': '开盘',
@@ -452,59 +555,75 @@ def erbo_main_query_mode():
             'pctChg': '涨跌幅',
             'turn': '换手率'
         }
-        df = df.rename(columns={k: v for k, v in column_map.items() if k in df.columns})
-        # 利用昨天的收盘价计算振幅（如果没有“振幅”列则补充）
-        if '振幅' not in df.columns:
-            if '最高' in df.columns and '最低' in df.columns and '收盘' in df.columns:
-                df['振幅'] = ((df['最高'] - df['最低']) / df['收盘'].shift(1).replace(0, np.nan)) * 100
-                df['振幅'] = df['振幅'].fillna(0)  # 处理NaN值
-            else:
-                raise ValueError("DataFrame 缺少计算振幅所需的列（最高、最低、收盘）")
+        # df = df.rename(columns={k: v for k, v in column_map.items() if k in df.columns})
+        # # 利用昨天的收盘价计算振幅（如果没有“振幅”列则补充）
+        # if '振幅' not in df.columns:
+        #     if '最高' in df.columns and '最低' in df.columns and '收盘' in df.columns:
+        #         df['振幅'] = ((df['最高'] - df['最低']) / df['收盘'].shift(1).replace(0, np.nan)) * 100
+        #         df['振幅'] = df['振幅'].fillna(0)  # 处理NaN值
+        #     else:
+        #         raise ValueError("DataFrame 缺少计算振幅所需的列（最高、最低、收盘）")
         # 3. 应用所有mark方法
-        df = mark_zhu_erbo_condition1(df)
-        df = mark_consecutive_small_positive(df)
-        df = mark_volume_support(df)
-        df = mark_yang_yin_difference(df)
-        df = mark_low_volatility_and_flat_trend(df)
-        df = mark_market_protection(df)
-        df = mark_volume_shrinkage_vs_expansion(df)
-        df = mark_drop_rise_vs_drop_drop(df)
-
-
-
+        # df = mark_zhu_erbo_condition1(df)
+        # df = mark_consecutive_small_positive(df)
+        # df = mark_volume_support(df)
+        # df = mark_yang_yin_difference(df)
+        # df = mark_low_volatility_and_flat_trend(df)
+        # df = mark_market_protection(df)
+        # df = mark_volume_shrinkage_vs_expansion(df)
+        # df = mark_drop_rise_vs_drop_drop(df)
+        df = calculate_volume_price_turnover_percentile(df)
+        df = mark_volume_price_divergence(df)
+        df = calculate_amihud_illiquidity(df)
+        df = mark_latest_low_chg(df)
+        df = mark_today_shrink(df)
+        df = mark_today_postive(df)
 
         # 4. 统计最新一天命中条件数量和具体命中条件
         last = df.iloc[-1]
-        small_positive_days = int(last.get('连续缩量小阳线', 0))
-        volume_support_count = int(last.get('缩量承接次数', 0))
-        is_volume_support = bool(last.get('缩量承接', 0))
-        yang_yin_difference = int(last.get('阳线比阴线多天数', 0))
-        zhuerbo = int(last.get('朱二波条件1', 0))
-        consecutive_small_positive = int(last.get('连续缩量小阳线最大值', 0))
-        low_volatility_and_flat_trend = int(last.get('低波动平缓趋势', 0))
-        market_protection = int(last.get('护盘次数', 0))
-        volume_shrinkage_vs_expansion = int(last.get('缩量比放量多天数', 0))
-        drop_rise_vs_drop_drop = int(last.get('跌涨比跌跌多天数', 0))
-        volume_support_and_market_protection = volume_support_count + market_protection
-        wash_trading = int(last.get('洗盘', 0))
+        # small_positive_days = int(last.get('连续缩量小阳线', 0))
+        # volume_support_count = int(last.get('缩量承接次数', 0))
+        # is_volume_support = bool(last.get('缩量承接', 0))
+        # yang_yin_difference = int(last.get('阳线比阴线多天数', 0))
+        # zhuerbo = int(last.get('朱二波条件1', 0))
+        # consecutive_small_positive = int(last.get('连续缩量小阳线最大值', 0))
+        # low_volatility_and_flat_trend = int(last.get('低波动平缓趋势', 0))
+        # market_protection = int(last.get('护盘次数', 0))
+        # volume_shrinkage_vs_expansion = int(last.get('缩量比放量多天数', 0))
+        # drop_rise_vs_drop_drop = int(last.get('跌涨比跌跌多天数', 0))
+        # volume_support_and_market_protection = volume_support_count + market_protection
+        # wash_trading = int(last.get('洗盘', 0))
+        volume_price_turnover_percentile = last.get('volume_price_turn_body', 0)
+        amihud_illiquidity = last.get('amihud_illiquidity', 0)
+        volume_price_divergence = last.get('volume_price_divergence', 0)
+        latest_low_chg = last.get('最近5天chg都小于5%', 0)
+        today_shrink = last.get('今天是否为缩量', 0)
+        today_postive = last.get('今天是否为阳线', 0)
+
+
 
         results.append({
         "代码": code,
         "名称": name,
-        "连续缩量小阳线天数": small_positive_days,
-        "连续缩量小阳线最大值": consecutive_small_positive,
-        "今天是否为缩量承接": 1 if is_volume_support else 0,
-        "缩量承接次数": volume_support_count,
-        '阳线比阴线多天数': yang_yin_difference,
-        '二波': zhuerbo,
-        '低波动平缓趋势': low_volatility_and_flat_trend,
-        '护盘次数': market_protection,
-        '缩量比放量多天数': volume_shrinkage_vs_expansion,
-        '跌涨比跌跌多天数': drop_rise_vs_drop_drop,
-        '缩量承接加护盘次数': volume_support_and_market_protection,
-        '洗盘': wash_trading,
-        '洗盘承接护盘次数': wash_trading + market_protection + volume_support_count
-
+        # "连续缩量小阳线天数": small_positive_days,
+        # "连续缩量小阳线最大值": consecutive_small_positive,
+        # "今天是否为缩量承接": 1 if is_volume_support else 0,
+        # "缩量承接次数": volume_support_count,
+        # '阳线比阴线多天数': yang_yin_difference,
+        # '二波': zhuerbo,
+        # '低波动平缓趋势': low_volatility_and_flat_trend,
+        # '护盘次数': market_protection,
+        # '缩量比放量多天数': volume_shrinkage_vs_expansion,
+        # '跌涨比跌跌多天数': drop_rise_vs_drop_drop,
+        # '缩量承接加护盘次数': volume_support_and_market_protection,
+        # '洗盘': wash_trading,
+        # '洗盘承接护盘次数': wash_trading + market_protection + volume_support_count
+        '成交量与价格的关系': volume_price_turnover_percentile,
+        'Amihud非流动性': amihud_illiquidity,
+        '成交量与价格的背离': volume_price_divergence,
+        '最近5天chg都小于5%': latest_low_chg,
+        '今天是否为缩量': today_shrink,
+        '今天是否为阳线': today_postive,
 
         })
 

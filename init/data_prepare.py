@@ -118,10 +118,10 @@ def fetch_daily_kline(code, start_date=None, end_date=None, adjustflag="2"):
     logger.info(f"获取 {code} 从 {start_date} 到 {end_date} 的日K线数据")
     
     # K线数据字段
-    fields = "date,open,high,low,close,volume,turn,pctChg,peTTM,pbMRQ,psTTM,pcfNcfTTM"
-    
-    rs = bs.query_history_k_data_plus(code, fields, 
-                                      start_date=start_date, 
+    fields = "date,open,high,low,close,volume,turn,amount,pctChg,peTTM,pbMRQ,psTTM,pcfNcfTTM"
+
+    rs = bs.query_history_k_data_plus(code, fields,
+                                      start_date=start_date,
                                       end_date=end_date,
                                       frequency="d", 
                                       adjustflag=adjustflag)
@@ -394,6 +394,7 @@ def get_specific_stocks_latest_data(conn, cursor, freq='daily', length=30):
             
             # 按日期正序排列
             df = df.sort_values('date').reset_index(drop=True)
+            # print(df.columns)
             
             stock_data[code] = {
                 'code': code,
@@ -524,5 +525,5 @@ if __name__ == "__main__":
     # print(fetch_trade_dates())
     # update_stock_daily_kline(process=True,force_update=False)
     # print(DB_PATH)
-    update_stock_kline(freq='daily', force_update=False)
+    update_stock_kline(freq='daily', force_update=True)
     get_stock_industry()

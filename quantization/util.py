@@ -28,7 +28,7 @@ from sklearn.preprocessing import StandardScaler
 import statsmodels.api as sm
 from tqdm import tqdm  # 用于显示进度条
 from init import get_specific_stocks_latest_data
-from quantization.factor import factor_names, mark_volume_support
+from quantization.factor import factor_names, factor_dict, mask_dict
 import atexit
 import traceback
 
@@ -44,26 +44,13 @@ def validate_df_coluns(df_list):
             return False
     return True
 
-def validate_time_line(df_list):
-    """
-    验证list中的df长度是否相等，并且date列的开头和首尾都相同
-    """
-    if not df_list:
-        return False  # 空列表被认为是无效的
-    first_df = df_list[0]
-    for df in df_list[1:]:
-        if not df.index.equals(first_df.index):
-            logging.warning(f"时间线不一致: {first_df.index} vs {df.index}")
-            return False
-    return True
-
 @with_db_connection
 def get_industry_data(conn, cusor):
     sql = "select * from stock_industry"
     df = pd.read_sql(sql, conn)
     return df[['code', 'industry']]
 
-def validate_industry_dummy(industry_cluster=None):
+def _validate_industry_dummy(industry_cluster=None):
     if industry_cluster is None:
         df = get_industry_data()['industry']
     # df = get_industry_data()['industry']
@@ -77,7 +64,7 @@ def validate_industry_dummy(industry_cluster=None):
         return False
     return True
 
-def neutralize_features(df_list, cluster_dfs, cluster_names, code_list, feature_names, mask_list, date_col='date'):
+def neutralize_all_features(df_list, cluster_dfs, cluster_names, code_list, feature_names, mask_list, date_col='date'):
 
     """
     通用中性化回归函数
@@ -101,7 +88,6 @@ def neutralize_features(df_list, cluster_dfs, cluster_names, code_list, feature_
         raise ValueError("feature_names中的名称超出了特征范围")
     
     assert validate_df_coluns(df_list), "df_list中的所有DataFrame列必须相同"
-    # assert validate_time_line(df_list), "df_list中的所有DataFrame时间线必须相同"
 
     # 获取所有日期和股票代码
     all_dates = sorted(set.union(*[set(df[date_col]) for df in df_list]))
@@ -164,38 +150,36 @@ def process_and_neutralize_factors(all_data, cluster_names, feature_names, mask_
         # logging.info(f"处理特征 {i+1}/{len(feature_names)}: {feature_name} (类型: {'次数' if is_count_feature else '值'})")
 
         # 对次数特征进行百分比排名处理
+        preprocessed_col = f"{feature_name}_preprocessed"
         if is_count_feature:
             # 按日期分组计算百分比排名
-            all_data[f"{feature_name}_preprocessed"] = all_data.groupby(date_col)[feature_name].transform(
+            all_data[preprocessed_col] = all_data.groupby(date_col)[feature_name].transform(
                 lambda x: x.rank(pct=True, method='average')
             )
         else:
-            # 对值特征，直接使用原始值
-            raise NotImplementedError("值特征的处理尚未实现")
-        
+            # 做Z-score标准化
+            all_data[preprocessed_col] = (all_data[feature_name] - all_data[feature_name].mean()) / all_data[feature_name].std()
+
         # 对每个日期进行横截面中性化回归
-        neutralized_values = []
-        
+        # neutralized_values = []
+        neutralized_col = f"{feature_name}_neutral"
+        all_data[neutralized_col] = np.nan  # 初始化新列
+
         # 对每个日期进行处理
         for date in sorted(all_data[date_col].unique()):
             logging.info(f"处理日期 {date} 的特征 {feature_name}")
-            date_data = all_data[all_data[date_col] == date].copy()
-            
-            if len(date_data) < 3000:
-                logging.warning(f"日期 {date} 的数据量: {len(date_data)}，跳过中性化")
-                # neutralized_values.extend(date_data[f"{feature_name}_preprocessed"].values)
-                continue
-            # 
-            y = date_data[f"{feature_name}_preprocessed"].values
+            date_mask = all_data[date_col] == date
+            date_data = all_data[date_mask]            
 
-            # 为分类变量创建虚拟变量（one-hot编码）
-            # X_dummies = pd.DataFrame()
-            # for cluster_col in cluster_cols:
-            #     # 为每个分类变量创建虚拟变量，并丢弃基准组
-            #     dummies = pd.get_dummies(date_data[cluster_col], prefix=cluster_col, drop_first=True)
-        
-            #     X_dummies = pd.concat([X_dummies, dummies], axis=1)
-            X_dummies = pd.get_dummies(date_data[cluster_cols], drop_first=True)
+            y = date_data[preprocessed_col].values
+            valid_mask = pd.notna(y) # 过滤掉预处理后可能产生的NaN
+            
+            if valid_mask.sum() < 30: # 样本太少无法进行有意义的回归
+                logging.warning(f"日期 {date} 的有效数据量: {valid_mask.sum()}，跳过中性化")
+                continue
+
+            # 只对一个分类标准创建虚拟变量
+            X_dummies = pd.get_dummies(date_data[cluster_cols][valid_mask], drop_first=True)
             
             X = X_dummies.values.astype(float)
             
@@ -205,16 +189,18 @@ def process_and_neutralize_factors(all_data, cluster_names, feature_names, mask_
             # 执行OLS回归
             logging.info(f"计算日期 {date}/长度{len(date_data)}，特征 {feature_name} 的回归模型")
 
-            model = sm.OLS(y, X).fit()
+            model = sm.OLS(y[valid_mask], X).fit()
             # 获取残差作为中性化后的值
-            neutralized_values.extend(model.resid)
-    
-        # 将中性化后的值添加回数据框
-        all_data[f"{feature_name}_neutral"] = neutralized_values
-    
+            
+            # 获取当前日期的索引
+            date_indices = all_data.index[date_mask]
+            # 只对有效（非NaN）数据赋值
+            valid_indices = date_indices[valid_mask]
+            all_data.loc[valid_indices, neutralized_col] = model.resid
+
     return all_data
 
-def test_neutralize_features():
+def _test_neutralize_features():
     # 创建示例数据
     n_stocks = 10
     n_dates = 20
@@ -245,7 +231,8 @@ def test_neutralize_features():
     mask_list = [True] * n_features
 
     # 执行中性化
-    df_list = neutralize_features(df_list, cluster_dfs, code_list, feature_names, mask_list, "date")
+    df_list = neutralize_all_features(df_list, cluster_dfs, code_list, feature_names, mask_list, "date")
+
 
     return df_list
 
@@ -263,13 +250,6 @@ def evaluate_neutralized_factors(all_data, code_list, feature_names, date_col='d
     
     results = {}
     
-    # 1. 合并所有数据以便分析
-    # all_data = pd.DataFrame()
-    # for i, df in enumerate(neutralized_dfs):
-    #     df_copy = df.copy()
-    #     df_copy['code'] = code_list[i]
-    #     all_data = pd.concat([all_data, df_copy], ignore_index=True)
-    
     # 2. 使用向量化操作计算未来收益率 (核心改动)
     # 首先确保数据按股票和日期排序
     all_data = all_data.sort_values(by=['code', date_col]).reset_index(drop=True)
@@ -283,7 +263,7 @@ def evaluate_neutralized_factors(all_data, code_list, feature_names, date_col='d
     
     # 3. 评估每个因子
     for feature_name in feature_names:
-        print(f"\n评估因子: {feature_name}")
+        logging.info(f"评估因子: {feature_name}")
         
         # 计算IC（信息系数）
         ic_values = []
@@ -297,8 +277,17 @@ def evaluate_neutralized_factors(all_data, code_list, feature_names, date_col='d
             if len(group) < 10:
                 return None
             
+            factor_values = group[feature_name]
+            return_values = group['future_return']
+            
+            # --- 核心修改：检查输入是否为常数 ---
+            # 如果因子值或收益率值在截面上是恒定的，则无法计算IC
+            if len(factor_values.unique()) == 1 or len(return_values.unique()) == 1:
+                logging.warning(f"在日期 {group[date_col].iloc[0].date()}，因子 '{feature_name}' 或收益率是常数，无法计算IC。")
+                return np.nan # 返回NaN而不是None，以便后续dropna可以处理
+
             # 计算Spearman秩相关系数
-            ic, _ = spearmanr(group[feature_name], group['future_return'])
+            ic, _ = spearmanr(factor_values, return_values)
             return ic
 
         # 使用 groupby().apply() 计算每个日期的IC
@@ -317,13 +306,13 @@ def evaluate_neutralized_factors(all_data, code_list, feature_names, date_col='d
                 'IC_series': ic_series
             }
             
-            print(f"  IC均值: {ic_mean:.4f}, IC标准差: {ic_std:.4f}, IR: {ir:.4f}")
+            logging.info(f"  IC均值: {ic_mean:.4f}, IC标准差: {ic_std:.4f}, IR: {ir:.4f}")
         else:
-            print(f"  无法计算因子 {feature_name} 的IC值 (数据不足或全为NaN)")
-    
+            logging.warning(f"  无法计算因子 {feature_name} 的IC值 (数据不足或全为NaN)")
+
     return results
 
-def test_evaluate_neutralized_factors():
+def _test_evaluate_neutralized_factors():
     # 创建示例数据
     # 创建示例数据
     n_stocks = 10
@@ -356,78 +345,33 @@ def test_evaluate_neutralized_factors():
     mask_list = [True] * n_features
 
     # 执行中性化
-    df_list = neutralize_features(df_list, cluster_dfs, code_list, feature_names, mask_list, "date")
+    df_list = neutralize_all_features(df_list, cluster_dfs, code_list, feature_names, mask_list, "date")
     results = evaluate_neutralized_factors(
         df_list, code_list, [f"{name}_neutral" for name in feature_names], date_col='date', forward_period=5
     )
     return results
 
-def alignment_time_line(df_list):
-    """
-    对齐时间线
-    """
-    # 获取所有DataFrame的日期索引的并集
-    logging.info(f"原始时间线: {df_list[0]['date']}")
-
-    all_dates = set()
-    for df in df_list:
-        all_dates.update(df['date'])
-    all_dates = sorted(all_dates)
-
-    # 统计每个日期在多少个df中出现
-    date_counts = {}
-    for date in all_dates:
-        count = sum(date in set(df['date']) for df in df_list)
-        date_counts[date] = count
-
-    # 选择所有df都包含的最大连续日期区间
-    # 先找所有df都包含的日期
-    full_dates = [date for date in all_dates if date_counts[date] == len(df_list)]
-    if not full_dates:
-        raise ValueError("没有所有DataFrame都包含的日期，无法对齐")
-
-    # 找最大连续区间
-    max_seq = []
-    temp_seq = []
-    for i, date in enumerate(full_dates):
-        if not temp_seq:
-            temp_seq = [date]
-        else:
-            prev_date = temp_seq[-1]
-            if (pd.to_datetime(date) - pd.to_datetime(prev_date)).days == 1:
-                temp_seq.append(date)
-            else:
-                if len(temp_seq) > len(max_seq):
-                    max_seq = temp_seq
-                temp_seq = [date]
-    if len(temp_seq) > len(max_seq):
-        max_seq = temp_seq
-
-    # 只保留最大连续区间的日期
-    aligned_dates = set(max_seq)
-    logging.info(f"对齐后的时间线: {sorted(aligned_dates)}")
-    aligned_df_list = []
-    for df in df_list:
-        aligned_df = df[df['date'].isin(aligned_dates)].copy()
-        aligned_df = aligned_df.sort_values('date').reset_index(drop=True)
-        aligned_df_list.append(aligned_df)
-    return aligned_df_list
-
 def main():
-    stock_data = get_specific_stocks_latest_data(length=22)
+    stock_data = get_specific_stocks_latest_data(length=200)
     code_list = []
     df_list = []
+    required_columns = ['amount']               
+
     for num, i in enumerate(stock_data.values()):
-        code_list.append(i['code'])
-        logging.info(f"处理股票 {i['code']},({num}/{len(stock_data)})")
-        df = mark_volume_support(i['data'])
+        logging.info(f"处理股票 {i['code']},({num+1}/{len(stock_data)})")
+        if not all(col in i['data'].columns for col in required_columns):
+            logging.warning(f"股票 {i['code']} 的数据中缺少必要的列，跳过该股票。")
+            continue
+        for j in factor_names:
+            df = factor_dict[j](i['data'])
         df_list.append(df)
-    # df_list = alignment_time_line(df_list)
+        code_list.append(i['code'])
+        
     cluster_dfs = [get_industry_data()]
     cluster_names = ['industry']
-    feature_names = [factor_names[0]]
-    mask_list = [True] * len(feature_names)
-    all_data = neutralize_features(df_list, cluster_dfs, cluster_names, code_list, feature_names, mask_list, "date")
+    feature_names = factor_names
+    mask_list = [mask_dict[i] for i in feature_names]
+    all_data = neutralize_all_features(df_list, cluster_dfs, cluster_names, code_list, feature_names, mask_list, "date")
     results = evaluate_neutralized_factors(
         all_data, code_list, [f"{name}_neutral" for name in feature_names], date_col='date', forward_period=5
     )
@@ -440,6 +384,6 @@ def main():
 if __name__ == "__main__":
 #    print(test_neutralize_features())
 #    test_evaluate_neutralized_factors()
-#    main()
-   validate_industry_dummy()
+   main()
+#    validate_industry_dummy()
 
