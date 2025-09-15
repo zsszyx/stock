@@ -1,9 +1,10 @@
-
 import pandas as pd
 import numpy as np
-from functools import reduce
+import functools
 import os
 import sys
+import datetime
+import sqlite3
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 import logging
 from sklearn.isotonic import spearmanr
@@ -13,16 +14,50 @@ import statsmodels.api as sm
 from tqdm import tqdm
 from factors.factor import factor_names, factor_dict, mask_dict, get_factor_merge_table
 
+def get_logfile_with_time(log_dir="logs", prefix="util_main"):
+    os.makedirs(log_dir, exist_ok=True)
+    now = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    return os.path.join(log_dir, f"{prefix}.{now}.log")
+
+# 数据库路径
+DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'stock_data.db')
+# DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'stock_data.db')
+
+def with_db_connection(func):
+    """数据库连接的装饰器，自动处理连接的创建、提交和关闭"""
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        logging.info(f"数据库连接已建立: {DB_PATH}")
+        result = func(conn=conn, cursor=cursor, *args, **kwargs)
+        conn.commit()
+        logging.info("数据库操作已提交")
+        cursor.close()
+        logging.info("数据库连接已关闭")
+        return result
+    return wrapper
+
 class FactorTask:
-    def __init__(self, all_data, cluster_names=None, feature_names=None, mask_list=None, date_col='date', forward_period=5, log_file="util_main.INFO"):
+    def __init__(self, all_data, cluster_names=None, feature_names=None, mask_list=None, date_col='date', forward_period=5, log_file=None):
         self.all_data = all_data
         self.cluster_names = cluster_names if cluster_names is not None else ['industry']
         self.feature_names = feature_names if feature_names is not None else factor_names
         self.mask_list = mask_list if mask_list is not None else [mask_dict[i] for i in self.feature_names]
         self.date_col = date_col
         self.forward_period = forward_period
+        # 日志文件名带时间戳
+        if log_file is None:
+            log_file = get_logfile_with_time()
         self.log_file = log_file
-        self.logger = logging.getLogger(__name__)
+        self.logger = logging.getLogger(f"FactorTask_{id(self)}")
+        self.logger.setLevel(logging.INFO)
+        # 防止重复添加handler
+        if not self.logger.handlers:
+            fh = logging.FileHandler(self.log_file, encoding='utf-8')
+            formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
+            fh.setFormatter(formatter)
+            self.logger.addHandler(fh)
 
     def process_and_neutralize_factors(self):
         all_data = self.all_data.copy()
@@ -40,7 +75,7 @@ class FactorTask:
         x_values = pd.concat([log_market_cap, xdummy], axis=1)
         x_values = sm.add_constant(x_values)
         for i, (feature_name, is_count_feature) in enumerate(zip(feature_names, mask_list)):
-            logging.info(f"处理特征 {i+1}/{len(feature_names)}: {feature_name} (类型: {'次数' if is_count_feature else '值'})")
+            self.logger.info(f"处理特征 {i+1}/{len(feature_names)}: {feature_name} (类型: {'次数' if is_count_feature else '值'})")
             preprocessed_col = f"{feature_name}_preprocessed"
             if is_count_feature:
                 all_data[preprocessed_col] = all_data.groupby(date_col)[feature_name].transform(
@@ -51,13 +86,13 @@ class FactorTask:
             neutralized_col = f"{feature_name}_neutral"
             all_data[neutralized_col] = np.nan
             for date in sorted(all_data[date_col].unique()):
-                logging.info(f"处理日期 {date} 的特征 {feature_name}")
+                self.logger.info(f"处理日期 {date} 的特征 {feature_name}")
                 date_mask = all_data[date_col] == date
                 date_data = all_data[date_mask]
                 y = date_data[preprocessed_col].values
                 valid_mask = pd.notna(y)
                 if valid_mask.sum() < 30:
-                    logging.warning(f"日期 {date} 的有效数据量: {valid_mask.sum()}，跳过中性化")
+                    self.logger.warning(f"日期 {date} 的有效数据量: {valid_mask.sum()}，跳过中性化")
                     continue
                 temp_x_values = x_values.loc[date_data.index[valid_mask]]
                 model = sm.OLS(y[valid_mask], temp_x_values.astype(float)).fit()
@@ -78,12 +113,12 @@ class FactorTask:
         all_data['future_price'] = all_data.groupby('code')['close'].shift(-forward_period)
         all_data['future_return'] = (all_data['future_price'] - all_data['close']) / all_data['close']
         for feature_name in feature_names:
-            logging.info(f"评估因子: {feature_name}")
+            self.logger.info(f"评估因子: {feature_name}")
 
             def calculate_ic(group):
                 valid_group = group.dropna(subset=[feature_name, 'future_return'])
                 if len(valid_group) < 10:
-                    logging.info(f"在日期 {group[date_col].iloc[0]}, 因子 '{feature_name}' 或收益率是常数，无法计算IC")
+                    self.logger.info(f"在日期 {group[date_col].iloc[0]}, 因子 '{feature_name}' 或收益率是常数，无法计算IC")
                     return np.nan
                 factor_values = valid_group[feature_name]
                 return_values = valid_group['future_return']
@@ -102,23 +137,26 @@ class FactorTask:
                     'IR': ir,
                     'IC_samples': len(ic_series),
                 }
-                logging.info(f"因子{feature_name}, 加权IC均值: {ic_mean:.4f}, 加权IC标准差: {ic_std:.4f}, IR: {ir:.4f}")
+                self.logger.info(f"因子{feature_name}, IC均值: {ic_mean:.4f}, IC标准差: {ic_std:.4f}, IR: {ir:.4f}, 样本数: {len(ic_series)}")
             else:
-                logging.warning(f'无法计算因子 {feature_name} 的IC值 (数据不足或全为NaN)')
+                self.logger.warning(f'无法计算因子 {feature_name} 的IC值 (数据不足或全为NaN)')
         return results, all_data
     
-    def run(self, save_data_path=None):
+    @with_db_connection
+    def run(self, conn, cursor, save_data_path=None):
         logging.info(f"在分类变量 {self.cluster_names+['market_cap']} 下处理中性化特征: {self.feature_names}")
         self.process_and_neutralize_factors()
         results, all_data = self.evaluate_neutralized_factors()
         if save_data_path:
-            all_data.to_excel(save_data_path)
+            all_data.to_sql(save_data_path, if_exists='replace', index=False, con=conn)
         return results, all_data
 
 if __name__ == "__main__":
     # 示例用法
     df = get_factor_merge_table()
-    task = FactorTask(all_data=df, cluster_names=['industry'], feature_names=list(factor_dict.keys()), mask_list=[False]*len(factor_dict))
-    results, all_data = task.run()
+    # 日志文件名带时间戳
+    log_file = get_logfile_with_time()
+    task = FactorTask(all_data=df, cluster_names=['industry'], feature_names=list(factor_dict.keys()), mask_list=[False]*len(factor_dict), log_file=log_file)
+    results, all_data = task.run(save_data_path='neutralized_factors_meta_data')
     print(results)
 
