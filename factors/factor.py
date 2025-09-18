@@ -106,14 +106,26 @@ def calculate_volume_price_volatility(df: pd.DataFrame):
     df['volume_price_volatility'] = df['volume_price_volatility'].rolling(window=10).mean()
     return df
 
-factor_names = ['volume_price_volatility']
+def calculate_market_mean_return(df: pd.DataFrame):
+    """
+    计算全市场日均涨幅因子（所有股票每日涨幅均值，赋值到每只股票的对应日期行）
+    :param df: 包含股票数据的 DataFrame，需包含 'pctChg' 和 'date' 列
+    :return: 增加 'market_mean_return' 列的 DataFrame
+    """
+    df = df.copy()
+    mean_return = df.groupby('date')['pctChg'].transform('mean')
+    df['market_mean_return'] = mean_return
+    return df
+
+
+factor_names = ['volume_price_volatility', 'market_mean_return']
 
 factor_dict = {
     'volume_price_divergence': mark_volume_price_divergence,
     'amihud_illiquidity': calculate_amihud_illiquidity,
     'volume_price_turn_body': calculate_volume_price_turnover_percentile,
     'volume_price_volatility': calculate_volume_price_volatility,
-
+    'market_mean_return': calculate_market_mean_return,
 }
 # 标记是否为次数因子
 mask_dict = {
@@ -121,6 +133,7 @@ mask_dict = {
     'amihud_illiquidity': False,
     'volume_price_turn_body': False,
     'volume_price_volatility': False,
+    'market_mean_return': False,
 }
 
 def get_factor_merge_table(factor_names=None):
@@ -139,5 +152,7 @@ def get_factor_merge_table(factor_names=None):
     logging.info(df.tail())
     logging.info(df.info())
     return df
+
+
 if __name__ == "__main__":
     df = get_factor_merge_table(factor_names)
