@@ -117,8 +117,46 @@ def calculate_market_mean_return(df: pd.DataFrame):
     df['market_mean_return'] = mean_return
     return df
 
+def calculate_market_mean_return_ma10_minus_ma5(df: pd.DataFrame):
+    """
+    计算 market_mean_return 的10日均线减去5日均线（全市场截面，所有股票每天该值一致）
+    :param df: 包含 'market_mean_return' 列的 DataFrame
+    :return: 增加 'market_mean_return_ma10_minus_ma5' 列的 DataFrame
+    """
+    df = df.copy()
+    if 'market_mean_return' not in df.columns:
+        df = calculate_market_mean_return(df)
+    # 只保留每个日期一行
+    macro = df[['date', 'market_mean_return']].drop_duplicates().sort_values('date')
+    macro['ma10'] = macro['market_mean_return'].rolling(window=10, min_periods=1).mean()
+    macro['ma5'] = macro['market_mean_return'].rolling(window=5, min_periods=1).mean()
+    macro['market_mean_return_ma10_minus_ma5'] = macro['ma10'] - macro['ma5']
+    df = df.merge(macro[['date', 'market_mean_return_ma10_minus_ma5']], on='date', how='left')
+    return df
 
-factor_names = ['volume_price_volatility', 'market_mean_return']
+def calculate_market_mean_return_ma20_minus_ma10(df: pd.DataFrame):
+    """
+    计算 market_mean_return 的20日均线减去10日均线（全市场截面，所有股票每天该值一致）
+    :param df: 包含 'market_mean_return' 列的 DataFrame
+    :return: 增加 'market_mean_return_ma20_minus_ma10' 列的 DataFrame
+    """
+    df = df.copy()
+    if 'market_mean_return' not in df.columns:
+        df = calculate_market_mean_return(df)
+    macro = df[['date', 'market_mean_return']].drop_duplicates().sort_values('date')
+    macro['ma20'] = macro['market_mean_return'].rolling(window=20, min_periods=1).mean()
+    macro['ma10'] = macro['market_mean_return'].rolling(window=10, min_periods=1).mean()
+    macro['market_mean_return_ma20_minus_ma10'] = macro['ma20'] - macro['ma10']
+    df = df.merge(macro[['date', 'market_mean_return_ma20_minus_ma10']], on='date', how='left')
+    return df
+
+
+factor_names = [
+    'volume_price_volatility',
+    'market_mean_return',
+    'market_mean_return_ma10_minus_ma5',
+    'market_mean_return_ma20_minus_ma10',
+]
 
 factor_dict = {
     'volume_price_divergence': mark_volume_price_divergence,
@@ -126,6 +164,8 @@ factor_dict = {
     'volume_price_turn_body': calculate_volume_price_turnover_percentile,
     'volume_price_volatility': calculate_volume_price_volatility,
     'market_mean_return': calculate_market_mean_return,
+    'market_mean_return_ma10_minus_ma5': calculate_market_mean_return_ma10_minus_ma5,
+    'market_mean_return_ma20_minus_ma10': calculate_market_mean_return_ma20_minus_ma10,
 }
 # 标记是否为次数因子
 mask_dict = {
@@ -134,6 +174,8 @@ mask_dict = {
     'volume_price_turn_body': False,
     'volume_price_volatility': False,
     'market_mean_return': False,
+    'market_mean_return_ma10_minus_ma5': False,
+    'market_mean_return_ma20_minus_ma10': False,
 }
 
 def get_factor_merge_table(factor_names=None):
