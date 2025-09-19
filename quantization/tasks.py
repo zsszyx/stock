@@ -151,12 +151,83 @@ class FactorTask:
             all_data.to_sql(save_data_path, if_exists='replace', index=False, con=conn)
         return results, all_data
 
+class CorrelationTask:
+    """
+    计算并分析中性化因子之间的相关性。
+    """
+    def __init__(self, table_name='neutralized_factors_meta_data'):
+        self.table_name = table_name
+        self.logger = logging.getLogger(f"CorrelationTask_{id(self)}")
+        # 配置日志，如果还没有配置的话
+        if not self.logger.handlers:
+            handler = logging.StreamHandler()
+            formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+            handler.setFormatter(formatter)
+            self.logger.addHandler(handler)
+            self.logger.setLevel(logging.INFO)
+
+    @with_db_connection
+    def run(self, conn, cursor):
+        """
+        执行相关性分析。
+
+        :param conn: 数据库连接对象
+        :param cursor: 数据库游标对象
+        :return: 一个DataFrame，包含因子对和它们的相关性，按相关性降序排列。
+        """
+        self.logger.info(f"开始从表 '{self.table_name}' 中读取数据进行相关性分析。")
+        try:
+            df = pd.read_sql(f'SELECT * FROM {self.table_name}', conn)
+            self.logger.info(f"成功读取 {len(df)} 条数据。")
+        except Exception as e:
+            self.logger.error(f"无法从数据库读取表 '{self.table_name}'。错误: {e}")
+            self.logger.error("请确保 'FactorTask' 已成功运行并生成了此表。")
+            return None
+
+        # 筛选出所有中性化因子列
+        neutral_factors = [col for col in df.columns if col.endswith('_neutral')]
+        if len(neutral_factors) < 2:
+            self.logger.warning("找到的中性化因子少于2个，无法进行相关性分析。")
+            return None
+        
+        self.logger.info(f"找到 {len(neutral_factors)} 个中性化因子进行分析。")
+
+        # 计算相关性矩阵
+        correlation_matrix = df[neutral_factors].corr().abs()
+
+        # 提取上三角矩阵（k=1确保不包括对角线），避免重复对 (A,B) 和 (B,A) 以及自身对 (A,A)
+        upper_triangle = correlation_matrix.where(np.triu(np.ones(correlation_matrix.shape), k=1).astype(bool))
+
+        # 将矩阵转换为长格式的列表
+        correlation_pairs = upper_triangle.stack().reset_index()
+        correlation_pairs.columns = ['Factor_1', 'Factor_2', 'Correlation']
+
+        # 按相关性降序排序
+        sorted_pairs = correlation_pairs.sort_values(by='Correlation', ascending=False).reset_index(drop=True)
+        
+        # 移除因子名称中的 '_neutral' 后缀以提高可读性
+        sorted_pairs['Factor_1'] = sorted_pairs['Factor_1'].str.replace('_neutral', '')
+        sorted_pairs['Factor_2'] = sorted_pairs['Factor_2'].str.replace('_neutral', '')
+        
+        self.logger.info("相关性分析完成。")
+        return sorted_pairs
+
 if __name__ == "__main__":
-    # 示例用法
-    df = get_factor_merge_table()
-    # 日志文件名带时间戳
-    log_file = get_logfile_with_time()
-    task = FactorTask(all_data=df, cluster_names=['industry'], feature_names=list(factor_dict.keys()), mask_list=[False]*len(factor_dict), log_file=log_file)
-    results, all_data = task.run(save_data_path='neutralized_factors_meta_data')
-    print(results)
+    # 配置基本日志记录
+    # logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
+    # # 示例用法
+    # df = get_factor_merge_table()
+    # # 日志文件名带时间戳
+    # log_file = get_logfile_with_time()
+    # task = FactorTask(all_data=df, cluster_names=['industry'], feature_names=list(factor_dict.keys()), mask_list=[False]*len(factor_dict), log_file=log_file)
+    # results, all_data = task.run(save_data_path='neutralized_factors_meta_data')
+    # print("因子评估结果:")
+    # print(results)
+
+    # 新增：运行相关性分析任务
+    correlation_task = CorrelationTask(table_name='neutralized_factors_meta_data')
+    correlation_results = correlation_task.run()
+    if correlation_results is not None:
+        print("\n中性化因子相关性分析结果 (Top 10):")
+        print(correlation_results.head(10))
 
