@@ -4,9 +4,20 @@ import os
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 from data_prepare.prepare import get_stock_merge_industry_table
-import logging
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
+import logging
+import datetime
+log_dir = "logs"
+os.makedirs(log_dir, exist_ok=True)
+log_file = os.path.join(log_dir, f"factor_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s %(levelname)s %(message)s',
+    handlers=[
+        logging.FileHandler(log_file, encoding='utf-8'),
+        logging.StreamHandler()
+    ]
+)
 
 def groupby_code(func):
     """
@@ -150,13 +161,180 @@ def calculate_market_mean_return_ma20_minus_ma10(df: pd.DataFrame):
     df = df.merge(macro[['date', 'market_mean_return_ma20_minus_ma10']], on='date', how='left')
     return df
 
+@groupby_code
+def calculate_volume_ma_ratio(df: pd.DataFrame):
+    """
+    计算成交量20日均线与10日均线的比值因子
+    :param df: 包含 'volume' 列的 DataFrame
+    :return: 增加 'volume_ma_ratio' 列的 DataFrame
+    """
+    df = df.copy()
+    volume_ma20 = df['volume'].rolling(window=20).mean()
+    volume_ma10 = df['volume'].rolling(window=10).mean()
+    # 加上一个极小值避免除以0
+    df['volume_ma_ratio'] = volume_ma20 / (volume_ma10 + 1e-10)
+    return df
 
-factor_names = [
-    'volume_price_volatility',
-    'market_mean_return',
-    'market_mean_return_ma10_minus_ma5',
-    'market_mean_return_ma20_minus_ma10',
-]
+@groupby_code
+def calculate_volume_ma_ratio(df: pd.DataFrame):
+    """
+    计算成交量20日均线与10日均线的比值因子
+    :param df: 包含 'volume' 列的 DataFrame
+    :return: 增加 'volume_ma_ratio' 列的 DataFrame
+    """
+    df = df.copy()
+    volume_ma20 = df['volume'].rolling(window=20).mean()
+    volume_ma10 = df['volume'].rolling(window=10).mean()
+    # 加上一个极小值避免除以0
+    df['volume_ma_ratio'] = volume_ma20 / (volume_ma10 + 1e-10)
+    return df
+
+@groupby_code
+def calculate_volume_ma_min_pct(df: pd.DataFrame):
+    """
+    计算成交量过去30天的分位数排名（百分比）最小值越大排名越靠前
+    :param df: 包含 'volume' 列的 DataFrame
+    :return: 增加 'volume_ma_min_pct' 列的 DataFrame
+    """
+    df = df.copy()
+    df['volume_ma_min_pct'] = np.log1p(df['volume']).rolling(30).rank(pct=True, ascending=False)
+    return df
+
+@groupby_code
+def calculate_chaikin_ad_line(df: pd.DataFrame, chaikin_window=10):
+    """
+    计算基于换手率的蔡金资金流(CMF)和A/D线(ADL)，并处理一字板情况。
+
+    :param df: 包含'high', 'low', 'close', 'turn', 'pctChg'列的DataFrame
+    :param chaikin_window: CMF的计算窗口，默认为20
+    :return: 增加'chaikin_money_flow'和'ad_line'列的DataFrame
+    """
+    df = df.copy()
+    high, low, close, turn, pct_change = df['high'], df['low'], df['close'], df['turn'], df['pctChg']
+
+    # 1. 计算资金流乘数 (MFM)，处理一字板情况
+    # 正常情况
+    mfm = ((close - low) - (high - close)) / (high - low + 1e-10)
+    
+    # 一字板情况
+    is_one_word_board = (high == low)
+    is_limit_up = (pct_change > 9.8)  # 涨停一字板
+    is_limit_down = (pct_change < -9.8) # 跌停一字板
+    
+    # 根据一字板类型修正MFM
+    mfm = np.where(is_one_word_board & is_limit_up, 0.5, mfm)
+    mfm = np.where(is_one_word_board & is_limit_down, -0.5, mfm)
+    mfm = np.where(is_one_word_board & ~is_limit_up & ~is_limit_down, 0.0, mfm) # 停牌等
+
+    # 2. 计算资金流量 (MFV)，使用换手率
+    money_flow_volume = mfm * turn
+
+    df['ad_line'] = money_flow_volume.cumsum()
+    return df
+
+def calculate_factor_explosion_point(data: pd.DataFrame, 
+                                     sentiment_threshold=90, 
+                                     deviation_threshold=-5,
+                                     momentum_threshold=20) -> pd.Series:
+    """
+    计算“三位一体起爆点因子” (Trinity Explosion Factor)。
+    
+    该因子融合了三个维度的信号，旨在寻找股价从极端超卖状态反转的“起爆点”。
+    因子值为0-3的评分，分数越高，信号越强。
+    设计上适用于预测未来短期（如5日）的反转收益。
+
+    :param data: pd.DataFrame，必须包含 'high', 'low', 'close' 列
+    :param sentiment_threshold: 散户线的情绪阈值
+    :param deviation_threshold: 偏离度的负向偏离阈值
+    :param momentum_threshold: 主力线的超卖区阈值
+    :return: pd.Series，返回计算好的因子值
+    """
+    # --- 依赖计算 ---
+    # 1. 计算散户线
+    hhv_60 = data['high'].rolling(window=60, min_periods=30).max()
+    llv_60 = data['low'].rolling(window=60, min_periods=30).min()
+    denominator_sent = hhv_60 - llv_60
+    retail_sentiment = 100 * (hhv_60 - data['close']) / denominator_sent
+    retail_sentiment.replace([np.inf, -np.inf], np.nan, inplace=True)
+    
+    # 2. 计算偏离度
+    ma_4 = data['close'].rolling(window=4, min_periods=4).mean()
+    deviation = (data['close'] - ma_4) / ma_4 * 100
+    
+    # 3. 计算主力线
+    llv_30 = data['low'].rolling(window=30, min_periods=15).min()
+    hhv_30 = data['high'].rolling(window=30, min_periods=15).max()
+    relative_position = 100 * (data['close'] - llv_30) / (hhv_30 - llv_30)
+    relative_position.replace([np.inf, -np.inf], np.nan, inplace=True)
+    fast_smooth = relative_position.rolling(window=5, min_periods=3).mean()
+    slow_smooth = fast_smooth.rolling(window=3, min_periods=2).mean()
+    momentum_indicator = 3 * fast_smooth - 2 * slow_smooth
+    smoothed_momentum = momentum_indicator.ewm(span=6, adjust=False).mean()
+
+    # --- 因子评分计算 ---
+    # 条件1：情绪冰点
+    score1 = (retail_sentiment > sentiment_threshold).astype(int)
+    
+    # 条件2：动能衰竭 (负向偏离度极大，且开始回升)
+    cond2 = (deviation < deviation_threshold) & (deviation > deviation.shift(1))
+    score2 = cond2.astype(int)
+    
+    # 条件3：主力试探 (主力线在低位，且开始回升)
+    cond3 = (smoothed_momentum < momentum_threshold) & (smoothed_momentum > smoothed_momentum.shift(1))
+    score3 = cond3.astype(int)
+    
+    # 合成最终因子
+    factor = score1 + score2 + score3
+    data['explosion_point'] = factor
+    return data
+
+@groupby_code
+def calculate_mmt_overnight_A(df: pd.DataFrame, window=5):
+    """
+    计算隔夜动量因子 mmt_overnight_A
+    :param df: 包含 'open', 'close' 列的 DataFrame
+    :param window: 动量回看窗口，默认为5
+    :return: 增加 'mmt_overnight_A' 列的 DataFrame
+    """
+    df = df.copy()
+    # 前一日收盘价
+    close_t1 = df['close'].shift(1)
+    # 隔夜收益率
+    overnight_return = df['open'] / close_t1 - 1
+    # N日移动平均隔夜动量
+    df['mmt_overnight_A'] = overnight_return.rolling(window=window).mean()
+    return df
+
+@groupby_code
+def calculate_weighted_rsi(df: pd.DataFrame, window=10):
+    """
+    计算成交量加权RSI因子
+    :param df: 包含 'close', 'volume' 列的 DataFrame
+    :param window: RSI计算窗口，默认为14
+    :return: 增加 'weighted_rsi' 列的 DataFrame
+    """
+    df = df.copy()
+    # 计算涨跌幅
+    delta = df['close'].diff()
+    gain = np.where(delta > 0, delta, 0)
+    loss = np.where(delta < 0, -delta, 0)
+    # 计算成交量加权的涨跌幅
+    vol = df['volume']
+    weighted_gain = gain * vol
+    weighted_loss = loss * vol
+    # 计算N日加权均值
+    avg_gain = pd.Series(weighted_gain).rolling(window=window, min_periods=1).mean()
+    avg_loss = pd.Series(weighted_loss).rolling(window=window, min_periods=1).mean()
+    # 计算加权RSI
+    rs = avg_gain / (avg_loss + 1e-10)
+    df['weighted_rsi'] = 100 / (1 + rs)
+    return df
+
+factor_names = ['volume_price_volatility',
+                'amihud_illiquidity',
+                'volume_ma_min_pct',
+                'weighted_rsi',
+               ]
 
 factor_dict = {
     'volume_price_divergence': mark_volume_price_divergence,
@@ -166,6 +344,12 @@ factor_dict = {
     'market_mean_return': calculate_market_mean_return,
     'market_mean_return_ma10_minus_ma5': calculate_market_mean_return_ma10_minus_ma5,
     'market_mean_return_ma20_minus_ma10': calculate_market_mean_return_ma20_minus_ma10,
+    'volume_ma_ratio': calculate_volume_ma_ratio,
+    'volume_ma_min_pct': calculate_volume_ma_min_pct,
+    'ad_line': calculate_chaikin_ad_line,
+    'explosion_point': calculate_factor_explosion_point,
+    'mmt_overnight_A': calculate_mmt_overnight_A,
+    'weighted_rsi': calculate_weighted_rsi,
 }
 # 标记是否为次数因子
 mask_dict = {
@@ -176,12 +360,17 @@ mask_dict = {
     'market_mean_return': False,
     'market_mean_return_ma10_minus_ma5': False,
     'market_mean_return_ma20_minus_ma10': False,
+    'volume_ma_ratio': False,
+    'volume_ma_min_pct': False,
+    'ad_line': False,
+    'explosion_point': True,
+    'weighted_rsi': False,
 }
 
 def get_factor_merge_table(factor_names=None):
     if not factor_names:
         factor_names = factor_dict.keys()
-    df = get_stock_merge_industry_table(length=200)
+    df = get_stock_merge_industry_table(length=220)
     for name in factor_names:
         logging.info(f"计算因子: {name}")
         df = factor_dict[name](df)
@@ -195,6 +384,11 @@ def get_factor_merge_table(factor_names=None):
     logging.info(df.info())
     return df
 
+"""
+中性化因子相关性分析结果 (Top 10):
+                  Factor_1                 Factor_2  Correlation
+0   volume_price_turn_body  volume_price_volatility     0.775592
+"""
 
 if __name__ == "__main__":
     df = get_factor_merge_table(factor_names)

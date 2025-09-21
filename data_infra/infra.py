@@ -75,11 +75,6 @@ def fetch_trade_dates(start_date=None, end_date=None):
     # 筛选出是交易日的记录并按日期降序排序
     df = df[df['is_trading_day'] == '1']
     logger.info(f"获取到 {len(df)} 条交易日数据")
-
-        
-    if df['calendar_date'].isnull().any() or df['calendar_date'].empty():
-        logger.error("无法获取交易日数据")
-        return
     
     return df['calendar_date']
 
@@ -100,7 +95,7 @@ def fetch_stock_list(start_date=None, end_date=None):
     df = df[~df['code_name'].str.contains(r'\*|ST|S|退')]
     # df = df[df['code'].str.startswith(('sh.688', 'sz.300'))]  # 科创板和创业板
     logger.info(f"获取到 {len(df)} 只股票信息")
-    if df['code'].isnull().any() or df['code'].empty():
+    if df['code'].isnull().any():
         logger.error("无法获取股票列表，更新失败")
         return
     return df['code'], df['code_name']

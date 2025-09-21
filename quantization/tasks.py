@@ -212,17 +212,95 @@ class CorrelationTask:
         self.logger.info("相关性分析完成。")
         return sorted_pairs
 
+class IRWeightedFactorTask:
+    """
+    IR加权合并因子任务：
+    1. 读取所有 *_neutral 因子
+    2. 对每个交易日做截面Z-score标准化
+    3. 按IR权重加权合成综合因子分数
+    """
+    def __init__(self, table_name='neutralized_factors_meta_data', ir_weight_dict=None, output_col='ir_weighted_score'):
+        self.table_name = table_name
+        self.ir_weight_dict = ir_weight_dict  # 形如 {'因子名': 权重, ...}，因子名不带_neutral
+        self.output_col = output_col
+        self.logger = logging.getLogger(f"IRWeightedFactorTask_{id(self)}")
+        if not self.logger.handlers:
+            handler = logging.StreamHandler()
+            formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+            handler.setFormatter(formatter)
+            self.logger.addHandler(handler)
+            self.logger.setLevel(logging.INFO)
+
+    @with_db_connection
+    def run(self, conn, cursor, save_data_path=None):
+        self.logger.info(f"读取表 {self.table_name} 进行IR加权合成因子计算...")
+        df = pd.read_sql(f'SELECT * FROM {self.table_name}', conn)
+        # 1. 获取所有 *_neutral 因子列
+        neutral_cols = [col for col in df.columns if col.endswith('_neutral')]
+        if not neutral_cols:
+            self.logger.error('未找到任何 *_neutral 因子列！')
+            return None
+        # 2. 过滤出在IR权重字典中的因子
+
+        use_cols = [k for k in self.ir_weight_dict.keys() if k in neutral_cols]
+        weights = [self.ir_weight_dict[k] for k in use_cols]
+
+        self.logger.info(f"参与合成的因子: {use_cols}")
+        # 3. 对每个交易日做截面Z-score标准化
+        date_col = 'date'
+        def zscore(group):
+            return (group - group.mean()) / (group.std() + 1e-10)
+        zscored = df.groupby(date_col)[use_cols].transform(zscore)
+        # 4. 加权合成
+        score = np.dot(zscored.values, np.array(weights))
+        df[self.output_col] = score
+        # 5. 可选：保存到数据库
+        if save_data_path:
+            df.to_sql(save_data_path, if_exists='replace', index=False, con=conn)
+            self.logger.info(f"合成因子结果已保存到表 {save_data_path}")
+        return df[[date_col, 'code', self.output_col]]
+    
+class ResultExportTask:
+    """
+    从指定表提取最新日期的结果并导出为Excel
+    """
+    def __init__(self, table_name='ir_weighted_factors_meta_data', output_excel='result_latest.xlsx'):
+        self.table_name = table_name
+        self.output_excel = output_excel
+        self.logger = logging.getLogger(f"ResultExportTask_{id(self)}")
+        if not self.logger.handlers:
+            handler = logging.StreamHandler()
+            formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+            handler.setFormatter(formatter)
+            self.logger.addHandler(handler)
+            self.logger.setLevel(logging.INFO)
+
+    @with_db_connection
+    def run(self, conn, cursor):
+        self.logger.info(f"从表 {self.table_name} 读取最新日期数据...")
+        df = pd.read_sql(f'SELECT * FROM {self.table_name}', conn)
+        if 'date' not in df.columns:
+            self.logger.error('数据表中没有date列！')
+            return None
+        latest_date = df['date'].max()
+        latest_df = df[df['date'] == latest_date]
+        latest_df.to_excel(self.output_excel, index=False)
+        self.logger.info(f"最新日期({latest_date})数据已保存到 {self.output_excel}")
+        return latest_df
+
 if __name__ == "__main__":
     # 配置基本日志记录
-    # logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
-    # # 示例用法
-    # df = get_factor_merge_table()
-    # # 日志文件名带时间戳
-    # log_file = get_logfile_with_time()
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
+    # 示例用法
+    df = get_factor_merge_table(factor_names=factor_names)
+    # 日志文件名带时间戳
+    log_file = get_logfile_with_time()
     # task = FactorTask(all_data=df, cluster_names=['industry'], feature_names=list(factor_dict.keys()), mask_list=[False]*len(factor_dict), log_file=log_file)
-    # results, all_data = task.run(save_data_path='neutralized_factors_meta_data')
-    # print("因子评估结果:")
-    # print(results)
+    task = FactorTask(all_data=df, cluster_names=['industry'], feature_names=factor_names, mask_list=[mask_dict.get(factor, False) for factor in factor_names], log_file=log_file)
+    results, all_data = task.run(save_data_path='neutralized_factors_meta_data')
+    print("因子评估结果:")
+    for i in results:
+        print(f"{i}: {results[i]}")
 
     # 新增：运行相关性分析任务
     correlation_task = CorrelationTask(table_name='neutralized_factors_meta_data')
@@ -231,3 +309,11 @@ if __name__ == "__main__":
         print("\n中性化因子相关性分析结果 (Top 10):")
         print(correlation_results.head(10))
 
+    # 新增：运行IR加权合成因子任务
+    ir_weight_dict = {i: results[i]['IR'] for i in results}
+    ir_weighted_task = IRWeightedFactorTask(table_name='neutralized_factors_meta_data', ir_weight_dict=ir_weight_dict)
+    ir_weighted_results = ir_weighted_task.run(save_data_path='ir_weighted_factors_meta_data')
+
+    # 新增：导出最新一天结果到Excel
+    export_task = ResultExportTask(table_name='ir_weighted_factors_meta_data', output_excel='result_latest.xlsx')
+    export_task.run()
