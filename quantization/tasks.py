@@ -13,6 +13,9 @@ from sklearn.preprocessing import StandardScaler
 import statsmodels.api as sm
 from tqdm import tqdm
 from factors.factor import factor_names, factor_dict, mask_dict, get_factor_merge_table
+# 数据库路径
+DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'stock_data.db')
+# DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'stock_data.db')
 
 def setup_logger(name):
     """Function to set up a logger."""
@@ -32,9 +35,6 @@ def get_logfile_with_time(log_dir="logs", prefix="util_main"):
     now = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     return os.path.join(log_dir, f"{prefix}.{now}.log")
 
-# 数据库路径
-DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'stock_data.db')
-# DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'stock_data.db')
 
 def with_db_connection(func):
     """数据库连接的装饰器，自动处理连接的创建、提交和关闭"""
@@ -60,6 +60,30 @@ class FactorTask:
         self.date_col = date_col
         self.forward_period = forward_period
         self.logger = setup_logger(f"FactorTask_{id(self)}")
+
+        # 预先计算未来收益并过滤数据
+        all_data = self.all_data.copy()
+        all_data = all_data.sort_values(by=['code', self.date_col]).reset_index(drop=True)
+        all_data['future_price'] = all_data.groupby('code')['close'].shift(-self.forward_period)
+        all_data['future_return'] = (all_data['future_price'] - all_data['close']) / all_data['close']
+        
+        # 计算指数的未来收益率
+        index_df = all_data[[self.date_col, 'sh_close']].drop_duplicates(subset=[self.date_col]).sort_values(by=self.date_col)
+        index_df['index_future_close'] = index_df['sh_close'].shift(-self.forward_period)
+        index_df['index_future_return'] = (index_df['index_future_close'] - index_df['sh_close']) / index_df['sh_close']
+        
+        # 将指数收益率合并回主数据框
+        all_data = pd.merge(all_data, index_df[[self.date_col, 'index_future_return']], on=self.date_col, how='left')
+        
+        # 计算超额收益
+        all_data['future_return'] = all_data['future_return'] - all_data['index_future_return']
+
+        # 丢弃多余列
+        all_data = all_data.drop(columns=['future_price', 'index_future_close', 'index_future_return'])
+        
+        # 去除所有pctChg绝对值大于9.85的行
+        all_data = all_data[all_data['pctChg'].abs() <= 9.85]
+        self.all_data = all_data
 
     def process_and_neutralize_factors(self):
         all_data = self.all_data.copy()
@@ -114,7 +138,6 @@ class FactorTask:
             # 中性化
             neutralized_col = f"{feature_name}_neutral"
             
-            # 使用 groupby().apply() 替代按日期的for循环
             residuals = all_data.groupby(date_col, group_keys=False).apply(
                 _neutralize_single_date, 
                 feature_col=preprocessed_col, 
@@ -122,7 +145,6 @@ class FactorTask:
             )
             all_data[neutralized_col] = residuals
             
-            # 删除中间列和原始因子列
             all_data = all_data.drop(columns=[preprocessed_col, feature_name])
 
         self.all_data = all_data
@@ -132,30 +154,7 @@ class FactorTask:
         all_data = self.all_data.copy()
         feature_names = [f"{name}_neutral" for name in self.feature_names]
         date_col = self.date_col
-        forward_period = self.forward_period
         results = {}
-
-        all_data = all_data.sort_values(by=['code', date_col]).reset_index(drop=True)
-        all_data['future_price'] = all_data.groupby('code')['close'].shift(-forward_period)
-        all_data['future_return'] = (all_data['future_price'] - all_data['close']) / all_data['close']
-        
-        # 计算指数的未来收益率
-        # 先按日期排序，删除重复项，确保每个日期只有一个sh_close
-        index_df = all_data[[date_col, 'sh_close']].drop_duplicates(subset=[date_col]).sort_values(by=date_col)
-        index_df['index_future_close'] = index_df['sh_close'].shift(-forward_period)
-        index_df['index_future_return'] = (index_df['index_future_close'] - index_df['sh_close']) / index_df['sh_close']
-        
-        # 将指数收益率合并回主数据框
-        all_data = pd.merge(all_data, index_df[[date_col, 'index_future_return']], on=date_col, how='left')
-        
-        # 计算超额收益
-        all_data['future_return'] = all_data['future_return'] - all_data['index_future_return']
-
-        # 丢弃多余列
-        all_data = all_data.drop(columns=['future_price', 'index_future_close', 'index_future_return'])
-        
-        # 去除所有pctChg绝对值大于9.85的行
-        all_data = all_data[all_data['pctChg'].abs() <= 9.85]
         
         for feature_name in feature_names:
             self.logger.info(f"评估因子: {feature_name}")
