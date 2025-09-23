@@ -7,7 +7,7 @@ import datetime
 import sqlite3
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 import logging
-from sklearn.isotonic import spearmanr
+from scipy.stats import spearmanr
 from sklearn.linear_model import LinearRegression
 from sklearn.preprocessing import StandardScaler
 import statsmodels.api as sm
@@ -137,10 +137,10 @@ class FactorTask:
             def calculate_ic(group):
                 valid_group = group.dropna(subset=[feature_name, 'future_return'])
                 if len(valid_group) < 10:
-                    self.logger.info(f"在日期 {group[date_col].iloc[0]}, 因子 '{feature_name}' 或收益率是常数，无法计算IC")
+                    self.logger.info(f"在日期 {group[date_col].iloc[0]}, 因子 '{feature_name}' 的有效数据点少于10个，无法计算IC")
                     return np.nan
                 factor_values = valid_group[feature_name]
-                return_values = valid_group['index_future_return']
+                return_values = valid_group['future_return']
                 ic, _ = spearmanr(factor_values, return_values)
                 return ic
             
