@@ -260,6 +260,9 @@ def update_industry(conn, cursor, today):
     """获取股票行业分类数据"""
     rs = bs.query_stock_industry(date=today)
     rs = rs.get_data()
+    if rs.empty:
+        logger.error("无法获取股票行业分类数据")
+        return
     rs.to_sql('stock_industry', conn, if_exists='replace', index=False)
     return rs
 
