@@ -128,6 +128,9 @@ class FactorTask:
         # 丢弃多余列
         all_data = all_data.drop(columns=['future_price', 'index_future_close', 'index_future_return'])
         
+        # 去除所有pctChg绝对值大于9.85的行
+        all_data = all_data[all_data['pctChg'].abs() <= 9.85]
+        
         for feature_name in feature_names:
             self.logger.info(f"评估因子: {feature_name}")
 
