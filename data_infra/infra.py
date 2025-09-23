@@ -98,6 +98,8 @@ def fetch_stock_list(start_date=None, end_date=None):
     if df['code'].isnull().any():
         logger.error("无法获取股票列表，更新失败")
         return
+    # 增加一行上证指数
+    df = pd.concat([pd.DataFrame([{'code': 'sh.000001', 'code_name': '上证指数'}]), df], ignore_index=True)
     return df['code'], df['code_name']
 
 def fetch_daily_kline(code, start_date=None, end_date=None, adjustflag="2"):
@@ -286,8 +288,10 @@ def update_stock_kline(conn, cursor, freq='daily', codes=None, force_update=Fals
     existing_tables = {k: v for k, v in existing_tables.items() if v['freq'] == freq}
 
     codes, names = fetch_stock_list(end_date=today)
-
+    # 先更新行业分类数据
     update_industry(conn, cursor, today)
+
+    # 更新指数数据
     if max_stocks is not None:
         codes = codes[:max_stocks]
         names = names[:max_stocks]
@@ -344,7 +348,7 @@ def update_stock_kline(conn, cursor, freq='daily', codes=None, force_update=Fals
                 logger.warning(f"[{i+1}/{total_stocks}] {code} 无法获取新数据")
                 fail_count += 1
         else:
-            start_date = (datetime.datetime.now() - datetime.timedelta(days=365)).strftime('%Y-%m-%d')
+            start_date = (datetime.datetime.now() - datetime.timedelta(days=365*2)).strftime('%Y-%m-%d')
             df = fetch_daily_kline(code, start_date=start_date, end_date=today)
             if df is not None and not df.empty:
                 # 保存数据到数据库

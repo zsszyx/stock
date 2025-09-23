@@ -178,6 +178,13 @@ def get_stock_merge_table(length=30, freq='daily'):
     返回：拼接后的DataFrame
     """
     stock_data_dict = get_stocks_latest_data(freq=freq, length=length)
+
+    # 从dict中取出'sh000001'为key的项，并删除
+    sh000001_item = stock_data_dict.pop('sh000001')
+
+    sh000001_df = sh000001_item['data'][['date','close']].copy()
+    sh000001_df = sh000001_df.rename(columns={'close': 'sh_close'})
+
     dflist = []
     for idx, (code, info) in enumerate(stock_data_dict.items()):
         logger.info(f"merge股票 {code} 进度 {idx+1}/{len(stock_data_dict)} \r")
@@ -217,6 +224,8 @@ def get_stock_merge_table(length=30, freq='daily'):
         filled_dfs.append(df)
     # 拼接所有股票
     merged = pd.concat(filled_dfs, axis=0, ignore_index=True)
+    # 合并上'sh000001'的pctChg列
+    merged = pd.merge(merged, sh000001_df, on='date', how='left')
     # 按code, date排序
     merged = merged.sort_values(['code', 'date']).reset_index(drop=True)
     return merged

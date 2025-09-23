@@ -112,6 +112,22 @@ class FactorTask:
         all_data = all_data.sort_values(by=['code', date_col]).reset_index(drop=True)
         all_data['future_price'] = all_data.groupby('code')['close'].shift(-forward_period)
         all_data['future_return'] = (all_data['future_price'] - all_data['close']) / all_data['close']
+        
+        # 计算指数的未来收益率
+        # 先按日期排序，删除重复项，确保每个日期只有一个sh_close
+        index_df = all_data[[date_col, 'sh_close']].drop_duplicates(subset=[date_col]).sort_values(by=date_col)
+        index_df['index_future_close'] = index_df['sh_close'].shift(-forward_period)
+        index_df['index_future_return'] = (index_df['index_future_close'] - index_df['sh_close']) / index_df['sh_close']
+        
+        # 将指数收益率合并回主数据框
+        all_data = pd.merge(all_data, index_df[[date_col, 'index_future_return']], on=date_col, how='left')
+        
+        # 计算超额收益
+        all_data['future_return'] = all_data['future_return'] - all_data['index_future_return']
+
+        # 丢弃多余列
+        all_data = all_data.drop(columns=['future_price', 'index_future_close', 'index_future_return'])
+        
         for feature_name in feature_names:
             self.logger.info(f"评估因子: {feature_name}")
 
@@ -121,7 +137,7 @@ class FactorTask:
                     self.logger.info(f"在日期 {group[date_col].iloc[0]}, 因子 '{feature_name}' 或收益率是常数，无法计算IC")
                     return np.nan
                 factor_values = valid_group[feature_name]
-                return_values = valid_group['future_return']
+                return_values = valid_group['index_future_return']
                 ic, _ = spearmanr(factor_values, return_values)
                 return ic
             
