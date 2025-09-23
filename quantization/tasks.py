@@ -14,14 +14,13 @@ import statsmodels.api as sm
 from tqdm import tqdm
 from factors.factor import factor_names, factor_dict, mask_dict, get_factor_merge_table
 
-def setup_logger(name, log_file=None, level=logging.INFO):
+def setup_logger(name):
     """Function to set up a logger."""
     logger = logging.getLogger(name)
-    logger.setLevel(level)
     logger.propagate = False  # 防止日志消息传递到父记录器
-
+    logger.setLevel(logging.INFO)
     if not logger.handlers:
-        handler = logging.FileHandler(log_file, encoding='utf-8')
+        handler = logging.FileHandler(get_logfile_with_time(), encoding='utf-8')
         formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
         handler.setFormatter(formatter)
         logger.addHandler(handler)
@@ -60,8 +59,7 @@ class FactorTask:
         self.mask_list = mask_list 
         self.date_col = date_col
         self.forward_period = forward_period
-        self.log_file = log_file
-        self.logger = setup_logger(f"FactorTask_{id(self)}", self.log_file)
+        self.logger = setup_logger(f"FactorTask_{id(self)}")
 
     def process_and_neutralize_factors(self):
         all_data = self.all_data.copy()
@@ -317,15 +315,10 @@ class ResultExportTask:
         return latest_df
 
 if __name__ == "__main__":
-    # 配置基本日志记录
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
-    # 日志文件名带时间戳
-    log_file = get_logfile_with_time()
-
     df = get_factor_merge_table(factor_names=factor_names)
 
     # task = FactorTask(all_data=df, cluster_names=['industry'], feature_names=list(factor_dict.keys()), mask_list=[False]*len(factor_dict), log_file=log_file)
-    task = FactorTask(all_data=df, cluster_names=['industry'], feature_names=factor_names, mask_list=[mask_dict.get(factor, False) for factor in factor_names], log_file=log_file)
+    task = FactorTask(all_data=df, cluster_names=['industry'], feature_names=factor_names, mask_list=[mask_dict.get(factor, False) for factor in factor_names])
     results, all_data = task.run(save_data_path='neutralized_factors_meta_data')
     print("因子评估结果:")
     for i in results:
@@ -334,9 +327,9 @@ if __name__ == "__main__":
     # 新增：运行相关性分析任务
     correlation_task = CorrelationTask(table_name='neutralized_factors_meta_data')
     correlation_results = correlation_task.run()
-    if correlation_results is not None:
-        print("\n中性化因子相关性分析结果 (Top 10):")
-        print(correlation_results.head(10))
+
+    print("中性化因子相关性分析结果 (Top 10):")
+    print(correlation_results.head(10))
 
     # 新增：运行IR加权合成因子任务
     ir_weight_dict = {i: results[i]['IR'] for i in results}
