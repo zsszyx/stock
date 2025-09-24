@@ -164,17 +164,41 @@ def calculate_market_mean_return_ma20_minus_ma10(df: pd.DataFrame):
 @groupby_code
 def calculate_volume_ma_ratio(df: pd.DataFrame):
     """
-    计算成交量20日均线与10日均线的比值因子
+    计算成交量30日均线与10日均线的比值因子
     :param df: 包含 'volume' 列的 DataFrame
     :return: 增加 'volume_ma_ratio' 列的 DataFrame
     """
     df = df.copy()
-    volume_ma20 = df['volume'].rolling(window=20, min_periods=15).mean()
-    volume_ma10 = df['volume'].rolling(window=10, min_periods=8).mean()
+    df['volume_ma30'] = df['volume'].rolling(window=30, min_periods=25).mean()
+    df['volume_ma10'] = df['volume'].rolling(window=10, min_periods=8).mean()
     # 加上一个极小值避免除以0
-    df['volume_ma_ratio'] = volume_ma20 / (volume_ma10 + 1e-10)
+    df['volume_ma_ratio'] = df['volume_ma30'] / (df['volume_ma10'] + 1e-10)
     return df
 
+@groupby_code
+def calculate_volume_ma_ratio2(df: pd.DataFrame):
+    """
+    计算成交量10日均线与5日均线的比值因子
+    :param df: 包含 'volume' 列的 DataFrame
+    :return: 增加 'volume_ma_ratio' 列的 DataFrame
+    """
+    df = df.copy()
+    df['volume_ma30'] = df['volume'].rolling(window=30, min_periods=25).mean()
+    # 加上一个极小值避免除以0
+    df['volume_ma_ratio2'] = df['volume_ma30'] / (df['volume_ma10'] + 1e-10)
+    return df
+
+@groupby_code
+def calculate_volume_ma_ratio3(df: pd.DataFrame):
+    """
+    计算成交量20日均线与5日均线的比值因子
+    :param df: 包含 'volume' 列的 DataFrame
+    :return: 增加 'volume_ma_ratio' 列的 DataFrame
+    """
+    df = df.copy()
+    # 加上一个极小值避免除以0
+    df['volume_ma_ratio3'] = df['volume_ma20'] / (df['volume_ma5'] + 1e-10)
+    return df
 
 @groupby_code
 def calculate_volume_ma_min_pct(df: pd.DataFrame):
@@ -320,7 +344,6 @@ def calculate_weighted_rsi(df: pd.DataFrame, window=10):
 factor_names = ['volume_price_volatility',
                 'amihud_illiquidity',
                 'volume_ma_min_pct',
-                'weighted_rsi',
                ]
 
 factor_dict = {
@@ -337,6 +360,8 @@ factor_dict = {
     'explosion_point': calculate_factor_explosion_point,
     'mmt_overnight_A': calculate_mmt_overnight_A,
     'weighted_rsi': calculate_weighted_rsi,
+    'volume_ma_ratio2': calculate_volume_ma_ratio2,
+    'volume_ma_ratio3': calculate_volume_ma_ratio3,
 }
 # 标记是否为次数因子
 mask_dict = {
@@ -352,6 +377,8 @@ mask_dict = {
     'ad_line': False,
     'explosion_point': True,
     'weighted_rsi': False,
+    'volume_ma_ratio2': False,
+    'volume_ma_ratio3': False,
 }
 
 def get_factor_merge_table(factor_names=None):

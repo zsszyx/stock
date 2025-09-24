@@ -227,9 +227,8 @@ def exclude_limit_up_down(df):
             df[f'real_{col}'] = df[col]
             cols.append(col)
 
-    df['limited'] = pd.where(abs(df['pctChg']) >= 9.85, True, False)
-
-    df[cols][df['limited']] = np.nan
+    df['limited'] = np.where(abs(df['pctChg']) >= 9.85, True, False)
+    df.loc[df['limited'], cols] = np.nan
 
     return df
 

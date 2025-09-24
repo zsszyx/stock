@@ -79,7 +79,7 @@ class FactorTask:
         all_data['future_return'] = all_data['future_return'] - all_data['index_future_return']
 
         # 丢弃多余列
-        all_data = all_data.drop(columns=['future_price', 'index_future_close', 'index_future_return'])
+        all_data = all_data.drop(columns=['future_price', 'index_future_return'])
         
         self.all_data = all_data
 
@@ -194,7 +194,7 @@ class FactorTask:
     
     @with_db_connection
     def run(self, conn, cursor, save_data_path=None):
-        logging.info(f"在分类变量 {self.cluster_names+['market_cap']} 下处理中性化特征: {self.feature_names}")
+        self.logger.info(f"在分类变量 {self.cluster_names+['market_cap']} 下处理中性化特征: {self.feature_names}")
         self.process_and_neutralize_factors()
         results, all_data = self.evaluate_neutralized_factors()
         if save_data_path:
