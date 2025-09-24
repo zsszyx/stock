@@ -81,8 +81,6 @@ class FactorTask:
         # 丢弃多余列
         all_data = all_data.drop(columns=['future_price', 'index_future_close', 'index_future_return'])
         
-        # 去除所有pctChg绝对值大于9.85的行
-        all_data = all_data[all_data['pctChg'].abs() <= 9.85]
         self.all_data = all_data
 
     def process_and_neutralize_factors(self):
@@ -104,16 +102,24 @@ class FactorTask:
         
         def _neutralize_single_date(group, feature_col, x_vals):
             """对单个交易日的数据进行因子中性化"""
-            y = group[feature_col].values
-            valid_mask = pd.notna(y)
+            y = group[feature_col]
+            x = x_vals.loc[group.index]
+
+            # 找出 y 和 x 都没有缺失值的行
+            valid_mask = pd.notna(y) & x.notna().all(axis=1)
             
-            if valid_mask.sum() < 30:
-                self.logger.warning(f"日期 {group[date_col].iloc[0]} 的有效数据量: {valid_mask.sum()}，跳过中性化")
+            valid_count = valid_mask.sum()
+            date_str = group[date_col].iloc[0]
+            self.logger.info(f"日期 {date_str} 因子 {feature_col}: 找到 {valid_count} 个有效样本进行中性化。")
+
+            if valid_count < 30:
+                self.logger.warning(f"日期 {date_str} 的有效数据量: {valid_count}，小于30，跳过中性化")
                 return pd.Series(np.nan, index=group.index)
 
-            temp_x_values = x_vals.loc[group.index[valid_mask]]
+            y_valid = y[valid_mask]
+            x_valid = x.loc[valid_mask]
             
-            model = sm.OLS(y[valid_mask], temp_x_values.astype(float)).fit()
+            model = sm.OLS(y_valid, x_valid.astype(float)).fit()
             residuals = pd.Series(np.nan, index=group.index)
             residuals.loc[valid_mask] = model.resid
             return residuals
@@ -213,13 +219,9 @@ class CorrelationTask:
         :return: 一个DataFrame，包含因子对和它们的相关性，按相关性降序排列。
         """
         self.logger.info(f"开始从表 '{self.table_name}' 中读取数据进行相关性分析。")
-        try:
-            df = pd.read_sql(f'SELECT * FROM {self.table_name}', conn)
-            self.logger.info(f"成功读取 {len(df)} 条数据。")
-        except Exception as e:
-            self.logger.error(f"无法从数据库读取表 '{self.table_name}'。错误: {e}")
-            self.logger.error("请确保 'FactorTask' 已成功运行并生成了此表。")
-            return None
+      
+        df = pd.read_sql(f'SELECT * FROM {self.table_name}', conn)
+        self.logger.info(f"成功读取 {len(df)} 条数据。")
 
         # 筛选出所有中性化因子列
         neutral_factors = [col for col in df.columns if col.endswith('_neutral')]
@@ -268,11 +270,7 @@ class IRWeightedFactorTask:
         df = pd.read_sql(f'SELECT * FROM {self.table_name}', conn)
         # 1. 获取所有 *_neutral 因子列
         neutral_cols = [col for col in df.columns if col.endswith('_neutral')]
-        if not neutral_cols:
-            self.logger.error('未找到任何 *_neutral 因子列！')
-            return None
         # 2. 过滤出在IR权重字典中的因子
-
         use_cols = [k for k in self.ir_weight_dict.keys() if k in neutral_cols]
         weights = [self.ir_weight_dict[k] for k in use_cols]
 
@@ -286,9 +284,9 @@ class IRWeightedFactorTask:
         score = np.dot(zscored.values, np.array(weights))
         df[self.output_col] = score
         # 5. 可选：保存到数据库
-        if save_data_path:
-            df.to_sql(save_data_path, if_exists='replace', index=False, con=conn)
-            self.logger.info(f"合成因子结果已保存到表 {save_data_path}")
+
+        df.to_sql(save_data_path, if_exists='replace', index=False, con=conn)
+        self.logger.info(f"合成因子结果已保存到表 {save_data_path}")
         return df[[date_col, 'code', self.output_col]]
     
 class ResultExportTask:
@@ -304,9 +302,6 @@ class ResultExportTask:
     def run(self, conn, cursor):
         self.logger.info(f"从表 {self.table_name} 读取最新日期数据...")
         df = pd.read_sql(f'SELECT * FROM {self.table_name}', conn)
-        if 'date' not in df.columns:
-            self.logger.error('数据表中没有date列！')
-            return None
         latest_date = df['date'].max()
         latest_df = df[df['date'] == latest_date]
         latest_df.to_excel(self.output_excel, index=False)
