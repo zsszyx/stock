@@ -109,8 +109,7 @@ def get_stocks_latest_data(conn, cursor, freq='daily', length=30):
     freq_tables = {k: v for k, v in existing_tables.items() if v['freq'] == freq}
     
     if not freq_tables:
-        logger.warning(f"数据库中没有找到 {freq} 频率的数据表")
-        return {}
+        raise ValueError(f"数据库中没有找到任何{freq}数据表")
     
     logger.info(f"开始读取 {len(freq_tables)} 只指定股票的最后 {length} 行 {freq} 数据")
     
@@ -121,12 +120,6 @@ def get_stocks_latest_data(conn, cursor, freq='daily', length=30):
     for i, (code, _) in enumerate(freq_tables.items()):
         # 将股票代码转换为数据库中的格式
         code_clean = code.replace('.', '')
-
-        
-        if code_clean not in freq_tables:
-            logger.warning(f"[{i+1}/{len(freq_tables)}] {code_clean} 在数据库中未找到对应的 {freq} 数据表")
-            fail_count += 1
-            continue
         
         table_info = freq_tables[code_clean]
         table_name = table_info['table_name']
@@ -194,40 +187,18 @@ def get_stock_merge_table(length=30, freq='daily'):
         if not all(col in df.columns for col in required_columns):
             logger.warning(f"{code} 数据缺失关键列，已跳过")
             continue
-        dflist.append((code, df))
-    if not dflist:
-        logger.warning('无可用股票数据，未找到包含market_value的表')
-        return pd.DataFrame()
-    # 检查每一列的null和0比例
-    valid_dflist = []
-    for code, df in dflist:
-        valid = True
-        for col in [c for c in df.columns if c != 'pctChg']:
-            null_ratio = df[col].isnull().mean()
-            zero_ratio = (df[col] == 0).mean() if np.issubdtype(df[col].dtype, np.number) else 0
-            if null_ratio > 0.05 or zero_ratio > 0.05:
-                logger.warning(f"{code} 列 {col} null或0比例过高(null={null_ratio:.2%}, zero={zero_ratio:.2%})，已剔除")
-                valid = False
-                break
-        if valid:
-            valid_dflist.append((code, df))
-    if not valid_dflist:
-        logger.warning('所有股票数据均不满足质量要求')
-        return pd.DataFrame()
-    # 填充null和0
-    filled_dfs = []
-    for code, df in valid_dflist:
-        df = df.copy()
-        # 先bfill再ffill
-        df = df.bfill().ffill()
         df['code'] = code
-        filled_dfs.append(df)
+        dflist.append(df)
+    if not dflist:
+        raise ValueError("没有符合条件的股票数据")
+
     # 拼接所有股票
-    merged = pd.concat(filled_dfs, axis=0, ignore_index=True)
+    merged = pd.concat(dflist, axis=0, ignore_index=True)
     # 合并上'sh000001'的pctChg列
     merged = pd.merge(merged, sh000001_df, on='date', how='left')
     # 按code, date排序
     merged = merged.sort_values(['code', 'date']).reset_index(drop=True)
+    merged = exclude_limit_up_down(merged)
     return merged
 
 # 获取和行业信息合并后的大表
@@ -238,22 +209,29 @@ def get_stock_merge_industry_table(length=30, freq='daily'):
     """
     # 获取股票数据
     stock_df = get_stock_merge_table(length=length, freq=freq)
-    if stock_df.empty:
-        logger.warning('无可用股票数据')
-        return pd.DataFrame()
+
     # 获取行业信息
     industry_df = get_industry_data()
-    if industry_df.empty:
-        logger.warning('无可用行业数据')
-        return pd.DataFrame()
+
     # 合并数据
     merged = pd.merge(stock_df, industry_df, on='code', how='left')
-    # 检查industry列nan的比例是否超过5%
-    nan_ratio = merged['industry'].isnull().mean()
-    if nan_ratio > 0.05:
-        logger.warning(f"行业信息缺失比例过高({nan_ratio:.2%})")
-    merged = merged.dropna(subset=['industry'])
+
     return merged
+
+# 标记涨跌停
+def exclude_limit_up_down(df):
+    # 复制所有列，加上real_前缀
+    cols = []
+    for col in df.columns:
+        if col not in ['code', 'date', 'market_value']:
+            df[f'real_{col}'] = df[col]
+            cols.append(col)
+
+    df['limited'] = pd.where(abs(df['pctChg']) >= 9.85, True, False)
+
+    df[cols][df['limited']] = np.nan
+
+    return df
 
 if __name__ == "__main__":
     # 测试获取合并表

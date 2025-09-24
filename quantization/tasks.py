@@ -64,8 +64,8 @@ class FactorTask:
         # 预先计算未来收益并过滤数据
         all_data = self.all_data.copy()
         all_data = all_data.sort_values(by=['code', self.date_col]).reset_index(drop=True)
-        all_data['future_price'] = all_data.groupby('code')['close'].shift(-self.forward_period)
-        all_data['future_return'] = (all_data['future_price'] - all_data['close']) / all_data['close']
+        all_data['future_price'] = all_data.groupby('code')['real_close'].shift(-self.forward_period)
+        all_data['future_return'] = (all_data['future_price'] - all_data['real_close']) / all_data['real_close']
         
         # 计算指数的未来收益率
         index_df = all_data[[self.date_col, 'sh_close']].drop_duplicates(subset=[self.date_col]).sort_values(by=self.date_col)

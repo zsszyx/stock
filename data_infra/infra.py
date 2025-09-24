@@ -63,31 +63,19 @@ def fetch_trade_dates(start_date=None, end_date=None):
     """获取交易日数据"""
     logger.info(f"获取交易日数据: {start_date} 至 {end_date}")
     rs = bs.query_trade_dates(start_date=start_date, end_date=end_date)
-    if rs.error_code != '0':
-        logger.error(f"查询交易日期失败: {rs.error_msg}")
-        return None
-    
-    data_list = []
-    while (rs.error_code == '0') & rs.next():
-        data_list.append(rs.get_row_data())
-    
-    df = pd.DataFrame(data_list, columns=rs.fields)
+    df = rs.get_data()
+    if df.empty:
+        raise ValueError("获取的交易日数据为空")
     # 筛选出是交易日的记录并按日期降序排序
     df = df[df['is_trading_day'] == '1']
     logger.info(f"获取到 {len(df)} 条交易日数据")
-    
     return df['calendar_date']
 
 # ================= 股票基本信息 =================
 
 # @bs_login_required
 def fetch_stock_list(start_date=None, end_date=None):
-    """获取交易日数据"""
-    if start_date is None:
-        start_date = (datetime.datetime.now() - datetime.timedelta(days=30)).strftime('%Y-%m-%d')
-    if end_date is None:
-        end_date = (datetime.datetime.now() - datetime.timedelta(days=20)).strftime('%Y-%m-%d')
-    
+    """获取股票列表"""
     logger.info(f"获取 {end_date} 的股票列表")
     rs = bs.query_all_stock(end_date)
     df = rs.get_data()
@@ -95,9 +83,8 @@ def fetch_stock_list(start_date=None, end_date=None):
     df = df[~df['code_name'].str.contains(r'\*|ST|S|退')]
     # df = df[df['code'].str.startswith(('sh.688', 'sz.300'))]  # 科创板和创业板
     logger.info(f"获取到 {len(df)} 只股票信息")
-    if df['code'].isnull().any():
-        logger.error("无法获取股票列表，更新失败")
-        return
+    if df['code'].isnull().any() or df.empty:
+        raise ValueError("股票代码中存在空值, 或者获取的股票列表为空")
     # 增加一行上证指数
     df = pd.concat([pd.DataFrame([{'code': 'sh.000001', 'code_name': '上证指数'}]), df], ignore_index=True)
     return df['code'], df['code_name']
@@ -111,11 +98,6 @@ def fetch_daily_kline(code, start_date=None, end_date=None, adjustflag="2"):
         end_date: 结束日期，默认为昨天
         adjustflag: 复权类型，2-前复权，1-后复权，3-不复权，默认前复权
     """
-    if start_date is None:
-        start_date = (datetime.datetime.now() - datetime.timedelta(days=365)).strftime('%Y-%m-%d')
-    if end_date is None:
-        end_date = datetime.datetime.now().strftime('%Y-%m-%d')
-    
     logger.info(f"获取 {code} 从 {start_date} 到 {end_date} 的日K线数据")
     
     # K线数据字段
@@ -127,29 +109,16 @@ def fetch_daily_kline(code, start_date=None, end_date=None, adjustflag="2"):
                                       frequency="d", 
                                       adjustflag=adjustflag)
     # df = ak.stock_zh_a_daily(symbol=code.replace('.', ''), start_date=start_date.replace('-', ''), end_date=end_date.replace('-', ''), adjust="qfq")
+    df = rs.get_data()
 
-    if rs.error_code != '0':
-        logger.error(f"获取K线数据失败: {rs.error_msg}")
+    if rs.error_code != '0' or df.empty:
+        logger.error(f"获取daily K线数据失败: {rs.error_msg}")
         return None
     
-    data_list = []
-    while (rs.error_code == '0') & rs.next():
-        data_list.append(rs.get_row_data())
-    
-    if not data_list:
-        logger.warning(f"{code} 在指定时间段没有数据")
-        return None
-    
-    df = pd.DataFrame(data_list, columns=rs.fields)
-
     # 将能转换成数值的列都转换成数值类型
-    numeric_cols = []
     for col in df.columns[1:]:
         df[col] = pd.to_numeric(df[col])
-        numeric_cols.append(col)
-    df[numeric_cols] = df[numeric_cols].infer_objects(copy=False)
-    df[numeric_cols] = df[numeric_cols].interpolate(method='linear', limit_direction='both')
-    df[numeric_cols] = df[numeric_cols].ffill().bfill()
+
     df['turn'] = df['turn'].replace(0, np.nan)
     df['market_value'] = df['close'] * df['volume'] / df['turn']
     df['market_value'] = df['market_value'].ffill()
@@ -166,11 +135,6 @@ def fetch_minute60_kline(code, start_date=None, end_date=None, adjustflag="3"):
         end_date: 结束日期，默认为昨天
         adjustflag: 复权类型，2-前复权，1-后复权，3-不复权，默认前复权
     """
-    if start_date is None:
-        start_date = (datetime.datetime.now() - datetime.timedelta(days=365)).strftime('%Y-%m-%d')
-    if end_date is None:
-        end_date = datetime.datetime.now().strftime('%Y-%m-%d')
-
     logger.info(f"获取 {code} 从 {start_date} 到 {end_date} 的分钟K线数据")
 
     # K线数据字段
@@ -183,28 +147,16 @@ def fetch_minute60_kline(code, start_date=None, end_date=None, adjustflag="3"):
                                       adjustflag=adjustflag)
 
     if rs.error_code != '0':
-        logger.error(f"获取K线数据失败: {rs.error_msg}")
+        logger.error(f"获取minute K线数据失败: {rs.error_msg}")
         return None
-
-    data_list = []
-    while (rs.error_code == '0') & rs.next():
-        data_list.append(rs.get_row_data())
-
-    if not data_list:
-        logger.warning(f"{code} 在指定时间段没有数据")
-        return None
-
-    df = pd.DataFrame(data_list, columns=rs.fields)
+    
+    df = rs.get_data()
 
     # 将能转换成数值的列都转换成数值类型
     numeric_cols = []
     for col in df.columns[1:]:
         df[col] = pd.to_numeric(df[col])
         numeric_cols.append(col)
-    df[numeric_cols] = df[numeric_cols].infer_objects(copy=False)
-    df[numeric_cols] = df[numeric_cols].interpolate(method='linear', limit_direction='both')
-    # 3. 使用 ffill 和 bfill 替代 fillna(method=...)
-    df[numeric_cols] = df[numeric_cols].ffill().bfill()
 
     logger.info(f"获取到 {len(df)} 条分钟K线数据")
     return df
@@ -236,16 +188,11 @@ def get_table_info_from_db(conn, cursor):
                 'length': lens
             }
     if not table_info:
-        logger.error("数据库中没有找到K线数据表")
-        return
+        raise ValueError("数据库中没有找到任何K线数据表")
     return table_info
 
 def save_kline_to_db(conn, cursor, prefix, code, name, df, start_date, end_date):
     """保存K线数据到数据库"""
-    if df is None or df.empty:
-        logger.warning(f"{code} 没有数据可保存")
-        return None
-    
     # 格式化日期为YYYYMMDD格式用于表名
     start_date_fmt = start_date.replace('-', '')
     end_date_fmt = end_date.replace('-', '')
@@ -263,8 +210,7 @@ def update_industry(conn, cursor, today):
     rs = bs.query_stock_industry(date=today)
     rs = rs.get_data()
     if rs.empty:
-        logger.error("无法获取股票行业分类数据")
-        return
+        raise ValueError("获取的行业分类数据为空")
     rs.to_sql('stock_industry', conn, if_exists='replace', index=False)
     return rs
 

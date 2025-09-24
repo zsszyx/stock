@@ -38,14 +38,14 @@ def mark_volume_price_divergence(df: pd.DataFrame):
     在大表（含多股票）上分组计算成交量与价格背离因子。
     """
     df = df.copy()
-    close_ma = df['close'].rolling(window=20).mean()
-    volume_ma = df['volume'].rolling(window=20).mean()
+    close_ma = df['close'].rolling(window=20,min_periods=15).mean()
+    volume_ma = df['volume'].rolling(window=20,min_periods=15).mean()
     norm_volume = (df['volume'] - volume_ma)/volume_ma
     norm_close = (df['close'] - close_ma)/close_ma
     df['volume_price_divergence'] = abs(norm_close)/abs(norm_volume)
     df['volume_price_divergence'] = np.log1p(df['volume_price_divergence'])
     df['volume_price_divergence'] = np.where(norm_close < 0, df['volume_price_divergence'], -df['volume_price_divergence'])
-    df['volume_price_divergence'] = pd.Series(df['volume_price_divergence']).rolling(window=10).mean()
+    df['volume_price_divergence'] = df['volume_price_divergence'].rolling(window=10, min_periods=8).mean()
     return df
 
 @groupby_code
@@ -68,7 +68,7 @@ def calculate_amihud_illiquidity(df, window=21):
     daily_returns = df['pctChg']
     daily_turnover = df['amount']
     daily_illiquidity = np.abs(daily_returns) / (daily_turnover + 1e-10)
-    amihud_factor = daily_illiquidity.rolling(window=window).mean()
+    amihud_factor = daily_illiquidity.rolling(window=window, min_periods=window-5).mean()
     amihud_factor_log = np.log(1 + amihud_factor)
     df['amihud_illiquidity'] = amihud_factor_log
     return df
@@ -90,14 +90,14 @@ def calculate_volume_price_turnover_percentile(df: pd.DataFrame):
     # 计算换手率在过去60天所处的分位数
     df = df.copy()
     window = 60
-    turn_percentile = 1/df['turn'].rolling(window=window).rank(pct=True)
+    turn_percentile = 1/df['turn'].rolling(window=window, min_periods=window-5).rank(pct=True)
     turn_percentile = np.log1p(turn_percentile)
-    volume_percentile = 1/df['volume'].rolling(window=window).rank(pct=True)
+    volume_percentile = 1/df['volume'].rolling(window=window, min_periods=window-5).rank(pct=True)
     volume_percentile = np.log1p(volume_percentile)
-    body_percentile = 1/abs(df['close'] - df['open']).rolling(window=window).rank(pct=True)
+    body_percentile = 1/abs(df['close'] - df['open']).rolling(window=window, min_periods=window-5).rank(pct=True)
     body_percentile = np.log1p(body_percentile)
     df['volume_price_turn_body'] = body_percentile * volume_percentile
-    df['volume_price_turn_body'] = df['volume_price_turn_body'].rolling(window=10).mean()
+    df['volume_price_turn_body'] = df['volume_price_turn_body'].rolling(window=10, min_periods=8).mean()
     return df
 
 @groupby_code
@@ -110,11 +110,11 @@ def calculate_volume_price_volatility(df: pd.DataFrame):
     """
     df = df.copy()
     window = 60
-    volume_percent = df['volume'].rolling(window=window).rank(pct=True, ascending=False)
-    volatility = df['close'].rolling(window=window).std()/df['close'].rolling(window=window).mean()
+    volume_percent = df['volume'].rolling(window=window,min_periods=window-5).rank(pct=True, ascending=False)
+    volatility = df['close'].rolling(window=window,min_periods=window-5).std()/df['close'].rolling(window=window,min_periods=window-5).mean()
     volatility = np.log1p(1/volatility)
     df['volume_price_volatility'] = volume_percent * volatility
-    df['volume_price_volatility'] = df['volume_price_volatility'].rolling(window=10).mean()
+    df['volume_price_volatility'] = df['volume_price_volatility'].rolling(window=10, min_periods=8).mean()
     return df
 
 def calculate_market_mean_return(df: pd.DataFrame):
@@ -139,8 +139,8 @@ def calculate_market_mean_return_ma10_minus_ma5(df: pd.DataFrame):
         df = calculate_market_mean_return(df)
     # 只保留每个日期一行
     macro = df[['date', 'market_mean_return']].drop_duplicates().sort_values('date')
-    macro['ma10'] = macro['market_mean_return'].rolling(window=10, min_periods=1).mean()
-    macro['ma5'] = macro['market_mean_return'].rolling(window=5, min_periods=1).mean()
+    macro['ma10'] = macro['market_mean_return'].rolling(window=10, min_periods=8).mean()
+    macro['ma5'] = macro['market_mean_return'].rolling(window=5, min_periods=4).mean()
     macro['market_mean_return_ma10_minus_ma5'] = macro['ma10'] - macro['ma5']
     df = df.merge(macro[['date', 'market_mean_return_ma10_minus_ma5']], on='date', how='left')
     return df
@@ -155,8 +155,8 @@ def calculate_market_mean_return_ma20_minus_ma10(df: pd.DataFrame):
     if 'market_mean_return' not in df.columns:
         df = calculate_market_mean_return(df)
     macro = df[['date', 'market_mean_return']].drop_duplicates().sort_values('date')
-    macro['ma20'] = macro['market_mean_return'].rolling(window=20, min_periods=1).mean()
-    macro['ma10'] = macro['market_mean_return'].rolling(window=10, min_periods=1).mean()
+    macro['ma20'] = macro['market_mean_return'].rolling(window=20, min_periods=18).mean()
+    macro['ma10'] = macro['market_mean_return'].rolling(window=10, min_periods=8).mean()
     macro['market_mean_return_ma20_minus_ma10'] = macro['ma20'] - macro['ma10']
     df = df.merge(macro[['date', 'market_mean_return_ma20_minus_ma10']], on='date', how='left')
     return df
@@ -169,8 +169,8 @@ def calculate_volume_ma_ratio(df: pd.DataFrame):
     :return: 增加 'volume_ma_ratio' 列的 DataFrame
     """
     df = df.copy()
-    volume_ma20 = df['volume'].rolling(window=20).mean()
-    volume_ma10 = df['volume'].rolling(window=10).mean()
+    volume_ma20 = df['volume'].rolling(window=20, min_periods=15).mean()
+    volume_ma10 = df['volume'].rolling(window=10, min_periods=8).mean()
     # 加上一个极小值避免除以0
     df['volume_ma_ratio'] = volume_ma20 / (volume_ma10 + 1e-10)
     return df
@@ -183,8 +183,8 @@ def calculate_volume_ma_ratio(df: pd.DataFrame):
     :return: 增加 'volume_ma_ratio' 列的 DataFrame
     """
     df = df.copy()
-    volume_ma20 = df['volume'].rolling(window=20).mean()
-    volume_ma10 = df['volume'].rolling(window=10).mean()
+    volume_ma20 = df['volume'].rolling(window=20, min_periods=15).mean()
+    volume_ma10 = df['volume'].rolling(window=10, min_periods=8).mean()
     # 加上一个极小值避免除以0
     df['volume_ma_ratio'] = volume_ma20 / (volume_ma10 + 1e-10)
     return df
@@ -197,7 +197,7 @@ def calculate_volume_ma_min_pct(df: pd.DataFrame):
     :return: 增加 'volume_ma_min_pct' 列的 DataFrame
     """
     df = df.copy()
-    df['volume_ma_min_pct'] = np.log1p(df['volume']).rolling(30).rank(pct=True, ascending=False)
+    df['volume_ma_min_pct'] = np.log1p(df['volume']).rolling(30,min_periods=25).rank(pct=True, ascending=False)
     return df
 
 @groupby_code
@@ -251,8 +251,8 @@ def calculate_factor_explosion_point(data: pd.DataFrame,
     """
     # --- 依赖计算 ---
     # 1. 计算散户线
-    hhv_60 = data['high'].rolling(window=60, min_periods=30).max()
-    llv_60 = data['low'].rolling(window=60, min_periods=30).min()
+    hhv_60 = data['high'].rolling(window=60, min_periods=55).max()
+    llv_60 = data['low'].rolling(window=60, min_periods=55).min()
     denominator_sent = hhv_60 - llv_60
     retail_sentiment = 100 * (hhv_60 - data['close']) / denominator_sent
     retail_sentiment.replace([np.inf, -np.inf], np.nan, inplace=True)
@@ -262,8 +262,8 @@ def calculate_factor_explosion_point(data: pd.DataFrame,
     deviation = (data['close'] - ma_4) / ma_4 * 100
     
     # 3. 计算主力线
-    llv_30 = data['low'].rolling(window=30, min_periods=15).min()
-    hhv_30 = data['high'].rolling(window=30, min_periods=15).max()
+    llv_30 = data['low'].rolling(window=30, min_periods=25).min()
+    hhv_30 = data['high'].rolling(window=30, min_periods=25).max()
     relative_position = 100 * (data['close'] - llv_30) / (hhv_30 - llv_30)
     relative_position.replace([np.inf, -np.inf], np.nan, inplace=True)
     fast_smooth = relative_position.rolling(window=5, min_periods=3).mean()
@@ -302,7 +302,7 @@ def calculate_mmt_overnight_A(df: pd.DataFrame, window=5):
     # 隔夜收益率
     overnight_return = df['open'] / close_t1 - 1
     # N日移动平均隔夜动量
-    df['mmt_overnight_A'] = overnight_return.rolling(window=window).mean()
+    df['mmt_overnight_A'] = overnight_return.rolling(window=window, min_periods=window-1).mean()
     return df
 
 @groupby_code
@@ -323,8 +323,8 @@ def calculate_weighted_rsi(df: pd.DataFrame, window=10):
     weighted_gain = gain * vol
     weighted_loss = loss * vol
     # 计算N日加权均值
-    avg_gain = pd.Series(weighted_gain).rolling(window=window, min_periods=1).mean()
-    avg_loss = pd.Series(weighted_loss).rolling(window=window, min_periods=1).mean()
+    avg_gain = pd.Series(weighted_gain).rolling(window=window, min_periods=window-2).mean()
+    avg_loss = pd.Series(weighted_loss).rolling(window=window, min_periods=window-2).mean()
     # 计算加权RSI
     rs = avg_gain / (avg_loss + 1e-10)
     df['weighted_rsi'] = 100 / (1 + rs)
