@@ -175,19 +175,6 @@ def calculate_volume_ma_ratio(df: pd.DataFrame):
     df['volume_ma_ratio'] = volume_ma20 / (volume_ma10 + 1e-10)
     return df
 
-@groupby_code
-def calculate_volume_ma_ratio(df: pd.DataFrame):
-    """
-    计算成交量20日均线与10日均线的比值因子
-    :param df: 包含 'volume' 列的 DataFrame
-    :return: 增加 'volume_ma_ratio' 列的 DataFrame
-    """
-    df = df.copy()
-    volume_ma20 = df['volume'].rolling(window=20, min_periods=15).mean()
-    volume_ma10 = df['volume'].rolling(window=10, min_periods=8).mean()
-    # 加上一个极小值避免除以0
-    df['volume_ma_ratio'] = volume_ma20 / (volume_ma10 + 1e-10)
-    return df
 
 @groupby_code
 def calculate_volume_ma_min_pct(df: pd.DataFrame):
