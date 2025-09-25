@@ -187,8 +187,6 @@ def get_table_info_from_db(conn, cursor):
                 'end_date': end_date,
                 'length': lens
             }
-    if not table_info:
-        raise ValueError("数据库中没有找到任何K线数据表")
     return table_info
 
 def save_kline_to_db(conn, cursor, prefix, code, name, df, start_date, end_date):
@@ -228,7 +226,8 @@ def update_stock_kline(conn, cursor, freq='daily', codes=None, force_update=Fals
     trade_dates = fetch_trade_dates()
 
     today = trade_dates.iloc[-1]
-    
+    logger.info(f"最新交易日: {today}")
+
     # 获取数据库中已有的表信息
     existing_tables = get_table_info_from_db(conn, cursor)
     existing_tables = {k: v for k, v in existing_tables.items() if v['freq'] == freq}
