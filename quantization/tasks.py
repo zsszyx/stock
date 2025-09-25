@@ -64,22 +64,25 @@ class FactorTask:
         # 预先计算未来收益并过滤数据
         all_data = self.all_data.copy()
         all_data = all_data.sort_values(by=['code', self.date_col]).reset_index(drop=True)
-        all_data['future_price'] = all_data.groupby('code')['real_close'].shift(-self.forward_period)
-        all_data['future_return'] = (all_data['future_price'] - all_data['real_close']) / all_data['real_close']
-        
-        # 计算指数的未来收益率
+        # 计算个股五日内的最大收益
+        all_data['future_max_price'] = all_data.groupby('code')['real_close'].transform(
+            lambda x: x.shift(-self.forward_period).rolling(self.forward_period, min_periods=5).max()
+        )
+        all_data['future_max_return'] = (all_data['future_max_price'] - all_data['real_close']) / all_data['real_close']
+
+        # 计算指数五日内的最大收益
         index_df = all_data[[self.date_col, 'sh_close']].drop_duplicates(subset=[self.date_col]).sort_values(by=self.date_col)
-        index_df['index_future_close'] = index_df['sh_close'].shift(-self.forward_period)
-        index_df['index_future_return'] = (index_df['index_future_close'] - index_df['sh_close']) / index_df['sh_close']
-        
-        # 将指数收益率合并回主数据框
-        all_data = pd.merge(all_data, index_df[[self.date_col, 'index_future_return']], on=self.date_col, how='left')
-        
-        # 计算超额收益
-        all_data['future_return'] = all_data['future_return'] - all_data['index_future_return']
+        index_df['index_future_max_close'] = index_df['sh_close'].shift(-self.forward_period).rolling(self.forward_period, min_periods=1).max()
+        index_df['index_future_max_return'] = (index_df['index_future_max_close'] - index_df['sh_close']) / index_df['sh_close']
+
+        # 合并指数最大收益回主数据框
+        all_data = pd.merge(all_data, index_df[[self.date_col, 'index_future_max_return']], on=self.date_col, how='left')
+
+        # 计算超额最大收益
+        all_data['future_return'] = all_data['future_max_return'] - all_data['index_future_max_return']
 
         # 丢弃多余列
-        all_data = all_data.drop(columns=['future_price', 'index_future_return'])
+        all_data = all_data.drop(columns=['future_max_price', 'index_future_max_return', 'future_max_return'])
         
         self.all_data = all_data
 
