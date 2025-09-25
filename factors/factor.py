@@ -25,7 +25,9 @@ def groupby_code(func):
     """
     def wrapper(df, *args, **kwargs):
         if 'code' in df.columns:
-            return df.groupby('code', group_keys=False, dropna=True).apply(lambda g: func(g, *args, **kwargs))
+            if 'code' in df.index.names:
+                df = df.reset_index(drop=True)
+            return df.groupby('code').apply(lambda g: func(g, *args, **kwargs), include_groups=True)
         else:
             return func(df, *args, **kwargs)
     return wrapper
@@ -351,10 +353,10 @@ def calculate_amount_ma_ratio_diff(df: pd.DataFrame):
     """
     df = df.copy()
     df['amount_pcg_ratio'] = df['amount_ratio'] 
-    df['amount_ratio_mean'] = df['amount_pcg_ratio'].rolling(window=20, min_periods=18).mean()
-    df['amount_ratio_std'] = df['amount_pcg_ratio'].rolling(window=20, min_periods=18).std()
+    df['amount_ratio_mean'] = df['amount_pcg_ratio'].rolling(window=60, min_periods=18).mean()
+    df['amount_ratio_std'] = df['amount_pcg_ratio'].rolling(window=60, min_periods=18).std()
     # 加上一个极小值避免除以0
-    df['amount_ratio_diff'] =  - (df['amount_ratio'] - df['amount_ratio_mean']) / (df['amount_ratio_std'] + 1e-10)
+    df['amount_ratio_diff'] =   df['amount_ratio_mean'] / (df['amount_ratio_std'] + 1e-10)
     return df
 
 @groupby_code
@@ -370,9 +372,22 @@ def calculate_volume_std_ratio(df: pd.DataFrame):
     df['volume_std_ratio'] = mean_20 / (std_20 + 1e-10)
     return df
 
+@groupby_code
+def calculate_volume_minus_std_over_mean(df: pd.DataFrame, window=20):
+    """
+    计算 (成交量 - 滚动标准差) / 滚动均值 因子
+    :param df: 包含 'volume' 列的 DataFrame
+    :param window: 滚动窗口大小，默认为20
+    :return: 增加 'volume_minus_std_over_mean' 列的 DataFrame
+    """
+    rolling_std = df['volume'].rolling(window=window, min_periods=window-2).std()
+    rolling_mean = df['volume'].rolling(window=window, min_periods=window-2).mean()
+    df['volume_minus_std_over_mean'] = (df['volume'] - rolling_std) / (rolling_mean + 1e-10)
+    df['volume_minus_std_over_mean'] = df['volume_minus_std_over_mean'].rolling(window=5, min_periods=3).mean()
+    return df
 
 factor_names = ['volume_price_volatility',
-                'amount_ratio_diff',
+                'volume_minus_std_over_mean',
                ]
 
 factor_dict = {
@@ -393,6 +408,7 @@ factor_dict = {
     'volume_ma_ratio3': calculate_volume_ma_ratio3,
     'amount_ratio_diff': calculate_amount_ma_ratio_diff,
     'volume_std_ratio': calculate_volume_std_ratio,
+    'volume_minus_std_over_mean': calculate_volume_minus_std_over_mean,
 }
 # 标记是否为次数因子
 mask_dict = {
@@ -412,6 +428,8 @@ mask_dict = {
     'volume_ma_ratio3': False,
     'amount_ratio_diff': False,
     'mmt_overnight_A': False,
+    'volume_std_ratio': False,
+    'volume_minus_std_over_mean': False,
 }
 
 def get_factor_merge_table(factor_names=None):

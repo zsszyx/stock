@@ -63,6 +63,8 @@ class FactorTask:
 
         # 预先计算未来收益并过滤数据
         all_data = self.all_data.copy()
+        if 'code' in all_data.index.names:
+            all_data = all_data.reset_index(drop=True)
         all_data = all_data.sort_values(by=['code', self.date_col]).reset_index(drop=True)
         # 计算个股五日内的最大收益
         all_data['future_max_price'] = all_data.groupby('code')['real_close'].transform(
