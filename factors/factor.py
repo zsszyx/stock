@@ -107,13 +107,14 @@ def calculate_volume_price_volatility(df: pd.DataFrame):
     :param df: 包含股票数据的 DataFrame，必须包含 '成交量' 和 '收盘价' 列。
     :return: 增加 'volume_price_volatility' 列的 DataFrame。
     IC均值: 0.0723, IC标准差: 0.0618, IR: 1.1712
+    单独量  IC均值: 0.0036, IC标准差: 0.0648, IR: 0.0556, 样本数: 158
+    单独波动60日  IC均值: 0.06687830375950979, IC标准差: 0.08707288656849774, IR: 0.7680726618256597
     """
     df = df.copy()
     window = 60
-    volume_percent = df['volume'].rolling(window=window,min_periods=window-5).rank(pct=True, ascending=False)
+    # volume_percent = df['volume'].rolling(window=window,min_periods=window-5).rank(pct=True)
     volatility = df['close'].rolling(window=window,min_periods=window-5).std()/df['close'].rolling(window=window,min_periods=window-5).mean()
-    volatility = np.log1p(1/volatility)
-    df['volume_price_volatility'] = volume_percent * volatility
+    df['volume_price_volatility'] = volatility
     df['volume_price_volatility'] = df['volume_price_volatility'].rolling(window=10, min_periods=8).mean()
     return df
 
@@ -375,7 +376,7 @@ factor_dict = {
     'weighted_rsi': calculate_weighted_rsi,
     'volume_ma_ratio2': calculate_volume_ma_ratio2,
     'volume_ma_ratio3': calculate_volume_ma_ratio3,
-    'amount_ma_ratio_diff': calculate_amount_ma_ratio_diff,
+    'amount_ratio_diff': calculate_amount_ma_ratio_diff,
 }
 # 标记是否为次数因子
 mask_dict = {
@@ -393,7 +394,7 @@ mask_dict = {
     'weighted_rsi': False,
     'volume_ma_ratio2': False,
     'volume_ma_ratio3': False,
-    'amount_ma_ratio_diff': False,
+    'amount_ratio_diff': False,
 }
 
 def get_factor_merge_table(factor_names=None):
