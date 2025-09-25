@@ -351,10 +351,10 @@ def calculate_amount_ma_ratio_diff(df: pd.DataFrame):
     """
     df = df.copy()
     df['amount_pcg_ratio'] = df['amount_ratio'] 
-    df['amount_ratio_ma20'] = df['amount_pcg_ratio'].rolling(window=30, min_periods=25).mean()
-    df['amount_ratio_ma10'] = df['amount_pcg_ratio'].rolling(window=30, min_periods=25).std()
+    df['amount_ratio_mean'] = df['amount_pcg_ratio'].rolling(window=20, min_periods=18).mean()
+    df['amount_ratio_std'] = df['amount_pcg_ratio'].rolling(window=20, min_periods=18).std()
     # 加上一个极小值避免除以0
-    df['amount_ratio_diff'] = df['amount_ratio_ma20'] / (df['amount_ratio_ma10'] + 1e-10)
+    df['amount_ratio_diff'] =  - (df['amount_ratio'] - df['amount_ratio_mean']) / (df['amount_ratio_std'] + 1e-10)
     return df
 
 @groupby_code

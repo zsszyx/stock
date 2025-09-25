@@ -52,7 +52,7 @@ def with_db_connection(func):
     return wrapper
 
 class FactorTask:
-    def __init__(self, all_data, cluster_names=None, feature_names=None, mask_list=None, date_col='date', forward_period=5, log_file=None):
+    def __init__(self, all_data, cluster_names=None, feature_names=None, mask_list=None, date_col='date', forward_period=10, log_file=None):
         self.all_data = all_data
         self.cluster_names = cluster_names 
         self.feature_names = feature_names 
