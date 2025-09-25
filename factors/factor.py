@@ -350,14 +350,29 @@ def calculate_amount_ma_ratio_diff(df: pd.DataFrame):
     :return: 增加 'amount_ma_ratio' 列的 DataFrame
     """
     df = df.copy()
-    df['amount_ratio_ma20'] = df['amount_ratio'].rolling(window=20, min_periods=18).mean()
-    df['amount_ratio_ma10'] = df['amount_ratio'].rolling(window=10, min_periods=8).mean()
+    df['amount_pcg_ratio'] = df['amount_ratio'] 
+    df['amount_ratio_ma20'] = df['amount_pcg_ratio'].rolling(window=30, min_periods=25).mean()
+    df['amount_ratio_ma10'] = df['amount_pcg_ratio'].rolling(window=30, min_periods=25).std()
     # 加上一个极小值避免除以0
     df['amount_ratio_diff'] = df['amount_ratio_ma20'] / (df['amount_ratio_ma10'] + 1e-10)
     return df
 
+@groupby_code
+def calculate_volume_std_ratio(df: pd.DataFrame):
+    """
+    计算成交量30日标准差与10日标准差的比值因子
+    :param df: 包含 'volume' 列的 DataFrame
+    :return: 增加 'volume_std_ratio' 列的 DataFrame
+    """
+    df = df.copy()
+    std_20 = df['volume'].rolling(window=20, min_periods=18).std()
+    mean_20 = df['volume'].rolling(window=20, min_periods=18).mean()
+    df['volume_std_ratio'] = mean_20 / (std_20 + 1e-10)
+    return df
+
+
 factor_names = ['volume_price_volatility',
-                'amount_ratio_diff'
+                'amount_ratio_diff',
                ]
 
 factor_dict = {
@@ -377,6 +392,7 @@ factor_dict = {
     'volume_ma_ratio2': calculate_volume_ma_ratio2,
     'volume_ma_ratio3': calculate_volume_ma_ratio3,
     'amount_ratio_diff': calculate_amount_ma_ratio_diff,
+    'volume_std_ratio': calculate_volume_std_ratio,
 }
 # 标记是否为次数因子
 mask_dict = {
@@ -395,6 +411,7 @@ mask_dict = {
     'volume_ma_ratio2': False,
     'volume_ma_ratio3': False,
     'amount_ratio_diff': False,
+    'mmt_overnight_A': False,
 }
 
 def get_factor_merge_table(factor_names=None):
