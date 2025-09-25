@@ -194,11 +194,16 @@ def get_stock_merge_table(length=30, freq='daily'):
 
     # 拼接所有股票
     merged = pd.concat(dflist, axis=0, ignore_index=True)
+
+    # 除涨停
+    merged = exclude_limit_up_down(merged)
+
     # 合并上'sh000001'的pctChg列
     merged = pd.merge(merged, sh000001_df, on='date', how='left')
     # 按code, date排序
     merged = merged.sort_values(['code', 'date']).reset_index(drop=True)
-    merged = exclude_limit_up_down(merged)
+
+    merged = calculate_amount_ratio(merged)
     return merged
 
 # 获取和行业信息合并后的大表
@@ -230,6 +235,23 @@ def exclude_limit_up_down(df):
     df['limited'] = np.where(abs(df['pctChg']) >= 9.85, True, False)
     df.loc[df['limited'], cols] = np.nan
 
+    return df
+
+def calculate_amount_ratio(df: pd.DataFrame):
+    """
+    在每个日期截面，计算每只股票的成交额(amount)占当天总成交额的比例。
+
+    参数:
+        df: 包含 'date' 和 'amount' 列的DataFrame。
+
+    返回:
+        带有 'amount_ratio' 列的DataFrame。
+    """
+    # 按日期分组，计算每日的总成交额
+    daily_total_amount = df.groupby('date')['amount'].transform('sum')
+    
+    # 计算每只股票的成交额占比
+    df['amount_ratio'] = df['amount'] / daily_total_amount
     return df
 
 if __name__ == "__main__":

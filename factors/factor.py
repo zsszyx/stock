@@ -183,9 +183,9 @@ def calculate_volume_ma_ratio2(df: pd.DataFrame):
     :return: 增加 'volume_ma_ratio' 列的 DataFrame
     """
     df = df.copy()
-    df['volume_ma30'] = df['volume'].rolling(window=30, min_periods=25).mean()
+    df['volume_ma5'] = df['volume'].rolling(window=5, min_periods=5).mean()
     # 加上一个极小值避免除以0
-    df['volume_ma_ratio2'] = df['volume_ma30'] / (df['volume_ma10'] + 1e-10)
+    df['volume_ma_ratio2'] = df['volume_ma10'] / (df['volume_ma5'] + 1e-10)
     return df
 
 @groupby_code
@@ -197,7 +197,7 @@ def calculate_volume_ma_ratio3(df: pd.DataFrame):
     """
     df = df.copy()
     # 加上一个极小值避免除以0
-    df['volume_ma_ratio3'] = df['volume_ma20'] / (df['volume_ma5'] + 1e-10)
+    df['volume_ma_ratio3'] = df['volume_ma30'] / (df['volume_ma5'] + 1e-10)
     return df
 
 @groupby_code
@@ -341,9 +341,22 @@ def calculate_weighted_rsi(df: pd.DataFrame, window=10):
     df['weighted_rsi'] = 100 / (1 + rs)
     return df
 
+@groupby_code
+def calculate_amount_ma_ratio_diff(df: pd.DataFrame):
+    """
+    计算成交额20日均线与10日均线的比值因子
+    :param df: 包含 'amount' 列的 DataFrame
+    :return: 增加 'amount_ma_ratio' 列的 DataFrame
+    """
+    df = df.copy()
+    df['amount_ratio_ma20'] = df['amount_ratio'].rolling(window=20, min_periods=18).mean()
+    df['amount_ratio_ma10'] = df['amount_ratio'].rolling(window=10, min_periods=8).mean()
+    # 加上一个极小值避免除以0
+    df['amount_ratio_diff'] = df['amount_ratio_ma20'] / (df['amount_ratio_ma10'] + 1e-10)
+    return df
+
 factor_names = ['volume_price_volatility',
-                'amihud_illiquidity',
-                'volume_ma_min_pct',
+                'amount_ratio_diff'
                ]
 
 factor_dict = {
@@ -362,6 +375,7 @@ factor_dict = {
     'weighted_rsi': calculate_weighted_rsi,
     'volume_ma_ratio2': calculate_volume_ma_ratio2,
     'volume_ma_ratio3': calculate_volume_ma_ratio3,
+    'amount_ma_ratio_diff': calculate_amount_ma_ratio_diff,
 }
 # 标记是否为次数因子
 mask_dict = {
@@ -379,6 +393,7 @@ mask_dict = {
     'weighted_rsi': False,
     'volume_ma_ratio2': False,
     'volume_ma_ratio3': False,
+    'amount_ma_ratio_diff': False,
 }
 
 def get_factor_merge_table(factor_names=None):

@@ -66,7 +66,7 @@ class FactorTask:
         all_data = all_data.sort_values(by=['code', self.date_col]).reset_index(drop=True)
         # 计算个股五日内的最大收益
         all_data['future_max_price'] = all_data.groupby('code')['real_close'].transform(
-            lambda x: x.shift(-self.forward_period).rolling(self.forward_period, min_periods=5).max()
+            lambda x: x.shift(-self.forward_period).rolling(self.forward_period, min_periods=1).max()
         )
         all_data['future_max_return'] = (all_data['future_max_price'] - all_data['real_close']) / all_data['real_close']
 
@@ -112,7 +112,7 @@ class FactorTask:
             valid_mask = pd.notna(y) & x.notna().all(axis=1)
             
             valid_count = valid_mask.sum()
-            date_str = group[date_col].iloc[0]
+            date_str = group.name
             self.logger.info(f"日期 {date_str} 因子 {feature_col}: 找到 {valid_count} 个有效样本进行中性化。")
 
             if valid_count < 30:
@@ -147,11 +147,14 @@ class FactorTask:
             # 中性化
             neutralized_col = f"{feature_name}_neutral"
             
-            residuals = all_data.groupby(date_col, group_keys=False).apply(
+            residuals = all_data.groupby(date_col).apply(
                 _neutralize_single_date, 
                 feature_col=preprocessed_col, 
-                x_vals=x_values
+                x_vals=x_values,
+                include_groups=False
             )
+            # 修正：去除MultiIndex的分组层，保证索引与all_data一致
+            residuals = residuals.droplevel(0)
             all_data[neutralized_col] = residuals
             
             all_data = all_data.drop(columns=[preprocessed_col, feature_name])
@@ -171,14 +174,17 @@ class FactorTask:
             def calculate_ic(group):
                 valid_group = group.dropna(subset=[feature_name, 'future_return'])
                 if len(valid_group) < 10:
-                    self.logger.info(f"在日期 {group[date_col].iloc[0]}, 因子 '{feature_name}' 的有效数据点少于10个，无法计算IC")
+                    self.logger.info(f"在日期 {group.name}, 因子 '{feature_name}' 的有效数据点少于10个，无法计算IC")
                     return np.nan
                 factor_values = valid_group[feature_name]
                 return_values = valid_group['future_return']
+                if factor_values.nunique() <= 1 or return_values.nunique() <= 1:
+                    self.logger.info(f"在日期 {group.name}, 因子或收益全为常数，factor '{feature_name}' factor_values '{factor_values.nunique()}', return_values '{return_values.nunique()}'")
+                    return np.nan                
                 ic, _ = spearmanr(factor_values, return_values)
                 return ic
             
-            ic_series = all_data.groupby(date_col).apply(calculate_ic).dropna()
+            ic_series = all_data.groupby(date_col).apply(calculate_ic, include_groups=False).dropna()
 
             if not ic_series.empty:
                 ic_mean = ic_series.mean()  
@@ -312,10 +318,12 @@ class ResultExportTask:
         return latest_df
 
 if __name__ == "__main__":
-    df = get_factor_merge_table(factor_names=factor_names)
-
-    # task = FactorTask(all_data=df, cluster_names=['industry'], feature_names=list(factor_dict.keys()), mask_list=[False]*len(factor_dict), log_file=log_file)
-    task = FactorTask(all_data=df, cluster_names=['industry'], feature_names=factor_names, mask_list=[mask_dict.get(factor, False) for factor in factor_names])
+    if False:
+        df = get_factor_merge_table(factor_names=list(factor_dict.keys())) 
+        task = FactorTask(all_data=df, cluster_names=['industry'], feature_names=list(factor_dict.keys()), mask_list=[mask_dict.get(factor, False) for factor in list(factor_dict.keys())])
+    else:
+        df = get_factor_merge_table(factor_names=factor_names)
+        task = FactorTask(all_data=df, cluster_names=['industry'], feature_names=factor_names, mask_list=[mask_dict.get(factor, False) for factor in factor_names])
     results, all_data = task.run(save_data_path='neutralized_factors_meta_data')
     print("因子评估结果:")
     for i in results:
