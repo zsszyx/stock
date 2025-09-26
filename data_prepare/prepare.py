@@ -196,7 +196,7 @@ def get_stock_merge_table(length=30, freq='daily'):
     merged = pd.concat(dflist, axis=0, ignore_index=True)
 
     # 除涨停
-    merged = exclude_limit_up_down(merged)
+    # merged = exclude_limit_up_down(merged)
 
     # 合并上'sh000001'的pctChg列
     merged = pd.merge(merged, sh000001_df, on='date', how='left')
