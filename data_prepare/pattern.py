@@ -50,7 +50,7 @@ def find_pattern_v1(df: pd.DataFrame, window=20) -> pd.DataFrame:
 
     # 提取所有符合条件的20天数据段
     pattern_dfs = []
-    pattern_id = 1
+    pattern_id = 0
     for end_idx in tqdm(pattern_start_indices, desc="Extracting patterns"):
         start_idx = end_idx - window
         pattern_chunk = df.iloc[start_idx:end_idx].copy()
@@ -64,23 +64,68 @@ def find_pattern_v1(df: pd.DataFrame, window=20) -> pd.DataFrame:
     # 合并所有模式数据
     result_df = pd.concat(pattern_dfs, ignore_index=True)
 
-    return result_df
+    # --- DTW 计算 ---
+    dtw_results = {}
+    columns_to_compare = ['close', 'open', 'high', 'low', 'volume']
+    scaler = StandardScaler()
+
+    for i in tqdm(range(len(pattern_dfs)), desc="Calculating DTW"):
+        pattern_i_code = pattern_dfs[i]['code'].iloc[0]
+        pattern_i_date = pattern_dfs[i]['date'].iloc[-1]
+        
+        # 初始化当前 pattern 的 DTW 记录
+        dtw_results[i] = {
+            'code': pattern_i_code,
+            'date': pattern_i_date,
+            'dtw_distances': {col: [] for col in columns_to_compare},
+            'avg_dtw_distances': []
+        }
+
+        # 只与过去的 pattern 比较
+      
+        for j in range(i):
+            pattern_i_data = pattern_dfs[i]
+            pattern_j_data = pattern_dfs[j]
+                
+            dtw_vals_for_pair = []
+            for col in columns_to_compare:
+                # 标准化
+                series_i = scaler.fit_transform(pattern_i_data[[col]]).flatten()
+                series_j = scaler.fit_transform(pattern_j_data[[col]]).flatten()
+
+                # 计算DTW
+                distance = dtw(series_i, series_j, keep_internals=True).distance
+                dtw_results[i]['dtw_distances'][col].append(distance)
+                dtw_vals_for_pair.append(distance)
+
+            # 计算并记录均值
+            if dtw_vals_for_pair:
+                avg_dist = sum(dtw_vals_for_pair) / len(dtw_vals_for_pair)
+                dtw_results[i]['avg_dtw_distances'].append(avg_dist)
+
+    return result_df, dtw_results
+
+
 
 if __name__ == "__main__":
     from prepare import get_stock_merge_table
     df = get_stock_merge_table(length=220, freq='daily')
-    pattern_df = find_pattern_v1(df, window=20)
+    pattern_df, dtw_results = find_pattern_v1(df, window=20)
     
     if not pattern_df.empty:
         print(pattern_df.head(40))
         print(pattern_df.info(verbose=True))
         pattern_df.describe().to_excel("pattern_summary.xlsx")
 
-        # 演示如何使用DTW方法
-        num_patterns = pattern_df['pattern_index'].nunique()
-        if num_patterns >= 2:
-            distance = calculate_dtw_distance(pattern_df, 1, 2)
-            if distance != -1:
-                print(f"\n模式 1 和 模式 2 之间的DTW距离是: {distance:.4f}")
+        # 打印部分DTW结果作为演示
+        if dtw_results:
+            print("\n--- DTW Calculation Results ---")
+            for i in range(1, min(6, len(dtw_results) + 1)):
+                print(f"\nPattern {i} (Code: {dtw_results[i]['code']}, Date: {dtw_results[i]['date']}):")
+                if dtw_results[i]['avg_dtw_distances']:
+                    print(f"  - Average DTW distances to past patterns: {dtw_results[i]['avg_dtw_distances']}")
+                    print(f"  - DTW distances for 'close' to past patterns: {dtw_results[i]['dtw_distances']['close']}")
+                else:
+                    print("  - No past patterns to compare.")
     else:
         print("未找到符合条件的模式。")
