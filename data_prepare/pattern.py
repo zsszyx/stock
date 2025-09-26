@@ -1,5 +1,7 @@
 import pandas as pd
 from tqdm import tqdm
+from dtw import dtw
+from sklearn.preprocessing import StandardScaler
 
 def find_pattern_v1(df: pd.DataFrame, window=20) -> pd.DataFrame:
     """
@@ -64,11 +66,21 @@ def find_pattern_v1(df: pd.DataFrame, window=20) -> pd.DataFrame:
 
     return result_df
 
-
 if __name__ == "__main__":
     from prepare import get_stock_merge_table
     df = get_stock_merge_table(length=220, freq='daily')
     pattern_df = find_pattern_v1(df, window=20)
-    print(pattern_df.head(40))
-    print(pattern_df.info(verbose=True))
-    pattern_df.describe().to_excel("pattern_summary.xlsx")
+    
+    if not pattern_df.empty:
+        print(pattern_df.head(40))
+        print(pattern_df.info(verbose=True))
+        pattern_df.describe().to_excel("pattern_summary.xlsx")
+
+        # 演示如何使用DTW方法
+        num_patterns = pattern_df['pattern_index'].nunique()
+        if num_patterns >= 2:
+            distance = calculate_dtw_distance(pattern_df, 1, 2)
+            if distance != -1:
+                print(f"\n模式 1 和 模式 2 之间的DTW距离是: {distance:.4f}")
+    else:
+        print("未找到符合条件的模式。")
