@@ -25,7 +25,7 @@ def find_pattern_v1(df: pd.DataFrame, window=20) -> pd.DataFrame:
     diff_cols = ['close', 'open', 'high', 'low', 'volume']
     for col in diff_cols:
         # groupby('code')保证了每个股票的第一天diff值为NaN
-        df[f'{col}_diff'] = df.groupby('code')[col].diff()
+        df[f'{col}_diff'] = df.groupby('code')[col].pct_change()
 
     # 使用tqdm显示进度
     tqdm.pandas(desc="Processing stocks")
