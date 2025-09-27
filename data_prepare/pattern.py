@@ -2,6 +2,10 @@ import pandas as pd
 from tqdm import tqdm
 from dtw import dtw
 from sklearn.preprocessing import StandardScaler
+import matplotlib.pyplot as plt
+import numpy as np
+import json
+import sqlite3
 
 def find_pattern_v1(df: pd.DataFrame, window=20) -> pd.DataFrame:
     """
@@ -44,10 +48,6 @@ def find_pattern_v1(df: pd.DataFrame, window=20) -> pd.DataFrame:
     # 获取满足条件的21天窗口的起始索引
     pattern_start_indices = df.index[pattern_indices]
 
-    if not len(pattern_start_indices):
-        print("未找到符合条件的模式。")
-        return pd.DataFrame()
-
     # 提取所有符合条件的20天数据段
     pattern_dfs = []
     pattern_id = 0
@@ -58,74 +58,193 @@ def find_pattern_v1(df: pd.DataFrame, window=20) -> pd.DataFrame:
         pattern_dfs.append(pattern_chunk)
         pattern_id += 1
 
-    if not pattern_dfs:
-        return pd.DataFrame()
-
     # 合并所有模式数据
     result_df = pd.concat(pattern_dfs, ignore_index=True)
 
-    # --- DTW 计算 ---
-    dtw_results = {}
-    columns_to_compare = ['close', 'open', 'high', 'low', 'volume']
-    scaler = StandardScaler()
+    return result_df
 
-    for i in tqdm(range(len(pattern_dfs)), desc="Calculating DTW"):
-        pattern_i_code = pattern_dfs[i]['code'].iloc[0]
-        pattern_i_date = pattern_dfs[i]['date'].iloc[-1]
+def analyze_pattern_dtw(result_df: pd.DataFrame) -> dict:
+    """
+    使用动态时间规整（DTW）分析每个模式与过去模式的形态相似性。
+
+    Args:
+        result_df (pd.DataFrame): 包含所有已识别模式的数据，按 'pattern_index' 区分。
+
+    Returns:
+        dict: 一个字典，键是 pattern_id，值是包含以下信息的另一个字典：
+              - 'code': 模式对应的股票代码。
+              - 'date': 模式的结束日期。
+              - 'avg_dtw_distances': 一个列表，包含当前模式与所有过去模式的平均DTW距离。
+              - 'dtw_distances': 一个字典，包含各特征（如 'close_diff'）与过去模式的DTW距离列表。
+    """
+    print("开始进行形态DTW分析...")
+    
+    # 确保数据按 pattern_index 和 date 排序
+    result_df = result_df.sort_values(by=['pattern_index', 'date']).reset_index(drop=True)
+    
+    # 定义用于DTW计算的列
+    dtw_columns = ['open_diff', 'high_diff', 'low_diff', 'close_diff', 'volume_diff']
+    
+    # 填充可能存在的NaN值
+    result_df[dtw_columns] = result_df[dtw_columns].fillna(0)
+
+    # 最终存储结果的字典
+    dtw_results_dict = {}
+
+    # 获取所有唯一的 pattern_index
+    unique_patterns = result_df['pattern_index'].unique()
+
+    # 使用tqdm显示DTW分析的进度
+    for current_pattern_id in tqdm(unique_patterns, desc="Analyzing DTW for patterns"):
+        # 提取当前模式的数据
+        current_pattern_df = result_df[result_df['pattern_index'] == current_pattern_id]
+        current_start_date = current_pattern_df['date'].iloc[0]
         
-        # 初始化当前 pattern 的 DTW 记录
-        dtw_results[i] = {
-            'code': pattern_i_code,
-            'date': pattern_i_date,
-            'dtw_distances': {col: [] for col in columns_to_compare},
-            'avg_dtw_distances': []
+        # 获取当前模式的股票代码和结束日期
+        current_code = current_pattern_df['code'].iloc[0]
+        current_end_date = current_pattern_df['date'].iloc[-1]
+
+        # 初始化存储与过去模式比较结果的列表
+        avg_distances_to_past = []
+        # 初始化存储各维度距离的字典
+        distances_per_column = {col: [] for col in dtw_columns}
+
+        # 识别过去的模式（结束日期在当前模式开始日期之前）
+        past_patterns_df = result_df[result_df['date'] < current_start_date]
+        past_pattern_ids = past_patterns_df['pattern_index'].unique()
+
+        # 遍历所有过去的模式
+        for past_pattern_id in past_pattern_ids:
+            past_pattern_df = result_df[result_df['pattern_index'] == past_pattern_id]
+            
+            # 存储当前模式与这个过去模式在各个维度上的DTW距离
+            individual_dtw_distances = []
+
+            for col in dtw_columns:
+                # 提取两个模式的时间序列
+                series1 = current_pattern_df[col].values
+                series2 = past_pattern_df[col].values
+
+                # 计算DTW距离
+                alignment = dtw(series1, series2, distance_only=True)
+                distance = alignment.distance
+                individual_dtw_distances.append(distance)
+                distances_per_column[col].append(distance)
+
+            # 计算五个维度的平均DTW距离
+            if individual_dtw_distances:
+                avg_distance = sum(individual_dtw_distances) / len(individual_dtw_distances)
+                avg_distances_to_past.append(avg_distance)
+
+        # 存储当前模式的分析结果
+        dtw_results_dict[current_pattern_id] = {
+            'code': current_code,
+            'date': current_end_date,
+            'avg_dtw_distances': avg_distances_to_past,
+            'dtw_distances': distances_per_column
         }
+        
+    return dtw_results_dict
 
-        # 只与过去的 pattern 比较
-      
-        for j in range(i):
-            pattern_i_data = pattern_dfs[i]
-            pattern_j_data = pattern_dfs[j]
-                
-            dtw_vals_for_pair = []
-            for col in columns_to_compare:
-                # 标准化
-                series_i = scaler.fit_transform(pattern_i_data[[col]]).flatten()
-                series_j = scaler.fit_transform(pattern_j_data[[col]]).flatten()
+def save_patterns_by_date(df: pd.DataFrame, output_path: str):
+    """
+    将 pattern_df 按照每个模式的结束日期进行分组，
+    并将每个日期的所有模式数据保存到 Excel 文件的不同工作表中。
 
-                # 计算DTW
-                distance = dtw(series_i, series_j, keep_internals=True).distance
-                dtw_results[i]['dtw_distances'][col].append(distance)
-                dtw_vals_for_pair.append(distance)
+    Args:
+        df (pd.DataFrame): 包含模式数据的 DataFrame，需要有 'pattern_index' 和 'date' 列。
+        output_path (str): 输出的 Excel 文件路径。
+    """
+    print(f"正在将结果按日期保存到 {output_path}...")
+    
+    # 确保日期列是datetime类型
+    df['date'] = pd.to_datetime(df['date'])
 
-            # 计算并记录均值
-            if dtw_vals_for_pair:
-                avg_dist = sum(dtw_vals_for_pair) / len(dtw_vals_for_pair)
-                dtw_results[i]['avg_dtw_distances'].append(avg_dist)
+    # 找到每个 pattern_index 的结束日期
+    end_dates = df.groupby('pattern_index')['date'].max()
+    
+    # 将结束日期映射回原始 DataFrame
+    df['end_date'] = df['pattern_index'].map(end_dates)
+    
+    # 按结束日期分组
+    grouped = df.groupby('end_date')
+    
+    with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
+        for date, group in tqdm(grouped, desc="Saving patterns by date"):
+            # 将日期格式化为 YYYY-MM-DD 字符串，作为工作表名称
+            sheet_name = date.strftime('%Y-%m-%d')
+            # 将 group 数据写入对应的工作表
+            group.to_excel(writer, sheet_name=sheet_name, index=False)
+    
+    print(f"结果已成功保存到 {output_path}")
 
-    return result_df, dtw_results
+def save_patterns_to_sql(df: pd.DataFrame, db_path: str):
+    """
+    将 pattern_df 按照每个模式的结束日期进行分组，
+    并将每个日期的数据保存到 SQLite 数据库的不同表中。
 
-
+    Args:
+        df (pd.DataFrame): 包含模式数据的 DataFrame，需要有 'pattern_index' 和 'date' 列。
+        db_path (str): 输出的 SQLite 数据库文件路径。
+    """
+    print(f"正在将结果按日期保存到数据库 {db_path}...")
+    
+    # 找到每个 pattern_index 的结束日期
+    end_dates = df.groupby('pattern_index')['date'].max()
+    
+    # 将结束日期映射回原始 DataFrame
+    df['end_date'] = df['pattern_index'].map(end_dates)
+    
+    # 按结束日期分组
+    grouped = df.groupby('end_date')
+    
+    # 创建数据库连接
+    conn = sqlite3.connect(db_path)
+    
+    try:
+        for date, group in tqdm(grouped, desc="Saving patterns to SQL by date"):
+            # 将日期格式化为 YYYY_MM_DD 字符串，作为表名
+            table_name = f"pattern_{date}"
+            # 将 group 数据写入对应的表
+            group.to_sql(table_name, conn, if_exists='replace', index=False)
+    finally:
+        # 关闭数据库连接
+        conn.close()
+    
+    print(f"结果已成功保存到数据库 {db_path}")
 
 if __name__ == "__main__":
     from prepare import get_stock_merge_table
     df = get_stock_merge_table(length=220, freq='daily')
-    pattern_df, dtw_results = find_pattern_v1(df, window=20)
+    pattern_df = find_pattern_v1(df, window=20)
     
-    if not pattern_df.empty:
-        print(pattern_df.head(40))
-        print(pattern_df.info(verbose=True))
-        pattern_df.describe().to_excel("pattern_summary.xlsx")
+    # 新增调用：将结果按日期保存到数据库
+    save_patterns_to_sql(pattern_df.copy(), 'patterns.db')
 
-        # 打印部分DTW结果作为演示
-        if dtw_results:
-            print("\n--- DTW Calculation Results ---")
-            for i in range(1, min(6, len(dtw_results) + 1)):
-                print(f"\nPattern {i} (Code: {dtw_results[i]['code']}, Date: {dtw_results[i]['date']}):")
-                if dtw_results[i]['avg_dtw_distances']:
-                    print(f"  - Average DTW distances to past patterns: {dtw_results[i]['avg_dtw_distances']}")
-                    print(f"  - DTW distances for 'close' to past patterns: {dtw_results[i]['dtw_distances']['close']}")
-                else:
-                    print("  - No past patterns to compare.")
-    else:
-        print("未找到符合条件的模式。")
+    # dtw_results = analyze_pattern_dtw(pattern_df)
+
+    # # 存储结果到文件
+    # # Convert keys to string because json cannot handle int64 keys
+    # dtw_results_str_keys = {str(k): v for k, v in dtw_results.items()}
+    # with open('dtw_results.json', 'w') as f:
+    #     json.dump(dtw_results_str_keys, f, indent=4)
+
+    # def total_sorted_results():
+    #     sorted_results = sorted(dtw_results.items(), key=lambda item: len(item[1]['avg_dtw_distances']))
+
+    #     mean_avg_distances = []
+    #     for pattern_id, data in sorted_results:
+    #         mean_val = np.mean(data['avg_dtw_distances'])
+    #         mean_avg_distances.append(mean_val)
+
+    #     # 3. 绘制折线图
+    #     plt.figure(figsize=(12, 6))
+    #     plt.plot(range(len(mean_avg_distances)), mean_avg_distances, marker='o', linestyle='-')
+                
+    #     plt.title('Average DTW Distance of Patterns (Sorted by Number of Past Comparisons)')
+    #     plt.xlabel('Pattern Index (Sorted by Ascending Number of Past Patterns)')
+    #     plt.ylabel('Mean of Average DTW Distances')
+    #     plt.grid(True)
+    #     plt.show()
+
+    # total_sorted_results()
