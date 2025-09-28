@@ -509,8 +509,38 @@ class PatternMatch:
 
 if __name__ == "__main__":
     # 示例用法
-    from prepare import get_stock_merge_table
-    df = get_stock_merge_table(220)
-    pattern_matcher = PatternMatch(df, window=30)
-    dtw_stats = pattern_matcher.main()
+    # from prepare import get_stock_merge_table
+    # df = get_stock_merge_table(220)
+    # pattern_matcher = PatternMatch(df, window=30)
+    # dtw_stats = pattern_matcher.main()
+
+    # 从文件加载DTW统计结果并进行分析
+    print("\n--- 从文件加载并分析DTW统计结果 ---")
+    try:
+        with open('dtw_results.pkl', 'rb') as f:
+            # 加载数据，它是一个字典列表
+            dtw_stats_list = pickle.load(f)
+        
+        # 将字典列表转换为DataFrame
+        dtw_stats_df = pd.DataFrame(dtw_stats_list)
+        
+        if not dtw_stats_df.empty:
+            print("成功加载DTW统计结果。")
+            
+            # 计算并打印均值和标准差
+            mean_dtw = dtw_stats_df['median_dtw'].mean()
+            std_dtw = dtw_stats_df['median_dtw'].std()
+            
+            print(f"DTW中位数距离的均值: {mean_dtw:.4f}")
+            print(f"DTW中位数距离的标准差: {std_dtw:.4f}")
+            
+            print("\nDTW统计结果 (按距离从小到大排序):")
+            print(dtw_stats_df.head())
+        else:
+            print("加载的DTW结果文件为空或格式不正确。")
+
+    except FileNotFoundError:
+        print("错误: 未找到 'dtw_results.pkl' 文件。请确保之前的步骤已成功运行并生成了该文件。")
+    except Exception as e:
+        print(f"加载或处理文件时发生错误: {e}")
     
