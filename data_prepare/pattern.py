@@ -401,10 +401,20 @@ class PatternMatch:
 
         # 使用groupby和rolling来识别模式
         # 窗口大小为21，其中前20天用于条件1，第21天用于条件2
+        lookback_period = 60
+        total_window = lookback_period + window + 1
+
         pattern_indices = df.groupby('code')['pctChg'].progress_apply(
-            lambda x: x.rolling(window=window+1, closed='right', min_periods=window+1).apply(
-                lambda w: (w.iloc[-1] > self.pct_chg_threshold) and (abs(w.iloc[:-1]) <= self.pct_chg_threshold).all(),
-                raw=False
+            lambda x: x.rolling(window=total_window, closed='right', min_periods=total_window).apply(
+            lambda w: (
+                # 1. 最近60天内，存在至少一天涨跌幅绝对值 > 阈值
+                (abs(w.iloc[0:lookback_period]) > self.pct_chg_threshold).any() and
+                # 2. 随后的20天（window），所有天涨跌幅绝对值 <= 阈值
+                (abs(w.iloc[lookback_period:-1]) <= self.pct_chg_threshold).all() and
+                # 3. 第21天，涨跌幅 > 阈值
+                (w.iloc[-1] > self.pct_chg_threshold)
+            ),
+            raw=False
             )
         ).fillna(0).astype(bool)
 
@@ -476,6 +486,12 @@ class PatternMatch:
         dtw_stats_df = pd.DataFrame(valid_results)
         dtw_stats_df = dtw_stats_df.sort_values(by='median_dtw').reset_index(drop=True)
         
+        # 打印DTW中位数距离的统计信息
+        mean_dtw = dtw_stats_df['median_dtw'].mean()
+        std_dtw = dtw_stats_df['median_dtw'].std()
+        print(f"DTW中位数距离的均值: {mean_dtw:.4f}")
+        print(f"DTW中位数距离的标准差: {std_dtw:.4f}")
+            
         print("DTW统计计算完成。")
         return dtw_stats_df
 
