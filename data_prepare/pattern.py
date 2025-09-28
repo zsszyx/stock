@@ -1,71 +1,106 @@
 import pandas as pd
 from tqdm import tqdm
-from dtw import dtw
+from fastdtw import fastdtw
+from scipy.spatial.distance import euclidean
 from sklearn.preprocessing import StandardScaler
 import matplotlib.pyplot as plt
 import numpy as np
 import json
 import sqlite3
+import pickle
+from multiprocessing import Pool
+import random
 
-def find_pattern_v1(df: pd.DataFrame, window=20) -> pd.DataFrame:
+# --- 新增：用于并行计算的独立工作函数 (分块任务版) ---
+def _calculate_dtw_for_chunk(args):
     """
-    在一个包含所有股票行情的大表中，提取特定模式的数据。
-
-    模式定义：
-    1. 连续20天内，每日的涨跌幅（pctChg）绝对值不超过6%。
-    2. 在这20天之后的第21天，涨跌幅大于6%。
-
-    Args:
-        df (pd.DataFrame): 包含所有股票数据的DataFrame，
-                           需要包含 'code', 'date', 'pctChg' 列，
-                           并按 'code', 'date' 排序。
-
-    Returns:
-        pd.DataFrame: 一个新的DataFrame，包含所有被提取的模式数据，
-                      并带有一个 'pattern_index' 列。
+    计算一个'主'模式与所有过去模式的DTW距离。
+    这是一个'大块'任务，以减少进程开销。
     """
-    # 确认数据已排序
-    df = df.sort_values(by=['code', 'date']).reset_index(drop=True)
+    i, patterns_data, dtw_columns = args
+    current_pattern = patterns_data[i]
+    scaler = StandardScaler()
+    
+    avg_distances_to_past = []
+    distances_per_column = {col: [] for col in dtw_columns}
+    # 用于累加每个过去模式的平均距离
+    all_past_avg_distances = []
 
-    # 按code分组计算'close', 'open', 'high', 'low', 'volume'的日度变化
-    diff_cols = ['close', 'open', 'high', 'low', 'volume']
-    for col in diff_cols:
-        # groupby('code')保证了每个股票的第一天diff值为NaN
-        df[f'{col}_diff'] = df.groupby('code')[col].pct_change()
+    # 在这个工作函数内部循环，计算与所有过去模式的距离
+    for j in range(i):
+        past_pattern = patterns_data[j]
+        # 用于存储当前模式与这一个过去模式在5个维度上的距离
+        pair_distances = []
 
-    # 使用tqdm显示进度
-    tqdm.pandas(desc="Processing stocks")
+        for col in dtw_columns:
+            series1 = current_pattern['arrays'][col].reshape(-1, 1)
+            series2 = past_pattern['arrays'][col].reshape(-1, 1)
 
-    # 使用groupby和rolling来识别模式
-    # 窗口大小为21，其中前20天用于条件1，第21天用于条件2
-    pattern_indices = df.groupby('code')['pctChg'].progress_apply(
-        lambda x: x.rolling(window=window+1, closed='right', min_periods=window+1).apply(
-            lambda w: (w.iloc[-1] > 6) and (abs(w.iloc[:-1]) <= 6).all(),
-            raw=False
-        )
-    ).fillna(0).astype(bool)
+            series1_clean = series1[~np.isnan(series1).any(axis=1)]
+            series2_clean = series2[~np.isnan(series2).any(axis=1)]
 
-    # 获取满足条件的21天窗口的起始索引
-    pattern_start_indices = df.index[pattern_indices]
+            if len(series1_clean) != 20 or len(series2_clean) != 20:
+                distance = np.inf
+            else:
+                # 标准化
+                # series1_scaled = scaler.fit_transform(series1_clean.reshape(-1, 1)).flatten()
+                # series2_scaled = scaler.fit_transform(series2_clean.reshape(-1, 1)).flatten()
+                distance, _ = fastdtw(series1_clean, series2_clean, dist=euclidean)
 
-    # 提取所有符合条件的20天数据段
-    pattern_dfs = []
-    pattern_id = 0
-    for end_idx in tqdm(pattern_start_indices, desc="Extracting patterns"):
-        start_idx = end_idx - window
-        pattern_chunk = df.iloc[start_idx:end_idx].copy()
-        pattern_chunk['pattern_index'] = pattern_id
-        pattern_dfs.append(pattern_chunk)
-        pattern_id += 1
+            pair_distances.append(distance)
+            distances_per_column[col].append(distance)
+        
+        # 计算与这一个过去模式的平均距离，并累加
+        if pair_distances:
+            all_past_avg_distances.append(np.mean(pair_distances))
 
-    # 合并所有模式数据
-    result_df = pd.concat(pattern_dfs, ignore_index=True)
+    # 返回当前模式的ID和完整的计算结果
+    return (current_pattern['id'], {
+        'code': current_pattern['code'],
+        'date': current_pattern['end_date'],
+        'avg_dtw_distances': all_past_avg_distances, # 现在这里是与每个过去模式的平均距离列表
+        'dtw_distances': distances_per_column
+    })
 
-    return result_df
+# --- 新增：用于DTW统计的独立工作函数 ---
+def _dtw_worker(args):
+    """
+    计算一个 test_pattern 与所有 finded_patterns 的DTW距离，并返回中位数。
+    """
+    test_pattern_data, all_finded_patterns_data, dtw_columns = args
+    
+    distances = []
+    for finded_pattern_data in all_finded_patterns_data:
+        pair_distances = []
+        for col in dtw_columns:
+            series1 = test_pattern_data['arrays'][col].reshape(-1, 1)
+            series2 = finded_pattern_data['arrays'][col].reshape(-1, 1)
+
+            distance, _ = fastdtw(series1, series2, dist=euclidean)
+
+            pair_distances.append(distance)
+        
+        # 计算两个模式在所有维度上的平均距离
+        if pair_distances:
+            avg_pair_distance = np.mean(pair_distances)
+            distances.append(avg_pair_distance)
+
+    # 计算当前test_pattern与所有finded_patterns的DTW距离的中位数
+    if not distances:
+        return None
+    
+    median_dtw = np.median(distances)
+    
+    return {
+        'code': test_pattern_data['code'],
+        'date': test_pattern_data['end_date'],
+        'median_dtw': median_dtw
+    }
 
 def analyze_pattern_dtw(result_df: pd.DataFrame) -> dict:
     """
     使用动态时间规整（DTW）分析每个模式与过去模式的形态相似性。
+    此版本经过优化，通过预处理、并行计算和任务分块来提高性能。
 
     Args:
         result_df (pd.DataFrame): 包含所有已识别模式的数据，按 'pattern_index' 区分。
@@ -77,106 +112,70 @@ def analyze_pattern_dtw(result_df: pd.DataFrame) -> dict:
               - 'avg_dtw_distances': 一个列表，包含当前模式与所有过去模式的平均DTW距离。
               - 'dtw_distances': 一个字典，包含各特征（如 'close_diff'）与过去模式的DTW距离列表。
     """
-    print("开始进行形态DTW分析...")
+    print("开始进行形态DTW分析（优化版）...")
     
-    # 确保数据按 pattern_index 和 date 排序
-    result_df = result_df.sort_values(by=['pattern_index', 'date']).reset_index(drop=True)
-    
+    if result_df.empty:
+        print("输入的DataFrame为空，无法进行分析。")
+        return {}
+
     # 定义用于DTW计算的列
     dtw_columns = ['open_diff', 'high_diff', 'low_diff', 'close_diff', 'volume_diff']
     
-    # 填充可能存在的NaN值
-    result_df[dtw_columns] = result_df[dtw_columns].fillna(0)
+    # # 填充可能存在的NaN值
+    # result_df[dtw_columns] = result_df.groupby('pattern_index')[dtw_columns].transform(lambda x: x.dropna().reset_index(drop=True))
 
-    # 最终存储结果的字典
-    dtw_results_dict = {}
-
-    # 获取所有唯一的 pattern_index
-    unique_patterns = result_df['pattern_index'].unique()
-
-    # 使用tqdm显示DTW分析的进度
-    for current_pattern_id in tqdm(unique_patterns, desc="Analyzing DTW for patterns"):
-        # 提取当前模式的数据
-        current_pattern_df = result_df[result_df['pattern_index'] == current_pattern_id]
-        current_start_date = current_pattern_df['date'].iloc[0]
+    # --- 优化点 1: 数据预处理 ---
+    # 一次性将所有模式数据提取并转换为Numpy数组，存储在列表中
+    patterns_data = []
+    unique_patterns = np.sort(result_df['pattern_index'].unique())
+    
+    for pid in tqdm(unique_patterns, desc="Preprocessing patterns"):
+        pattern_df = result_df[result_df['pattern_index'] == pid]
+        pattern_arrays = {}
+        for col in dtw_columns:
+            pattern_arrays[col] = pattern_df[col].values
         
-        # 获取当前模式的股票代码和结束日期
-        current_code = current_pattern_df['code'].iloc[0]
-        current_end_date = current_pattern_df['date'].iloc[-1]
+        patterns_data.append({
+            'id': pid,
+            'code': pattern_df['code'].iloc[0],
+            'end_date': pattern_df['date'].iloc[-1],
+            'arrays': pattern_arrays
+        })
 
-        # 初始化存储与过去模式比较结果的列表
-        avg_distances_to_past = []
-        # 初始化存储各维度距离的字典
-        distances_per_column = {col: [] for col in dtw_columns}
 
-        # 识别过去的模式（结束日期在当前模式开始日期之前）
-        past_patterns_df = result_df[result_df['date'] < current_start_date]
-        past_pattern_ids = past_patterns_df['pattern_index'].unique()
 
-        # 遍历所有过去的模式
-        for past_pattern_id in past_pattern_ids:
-            past_pattern_df = result_df[result_df['pattern_index'] == past_pattern_id]
+    # --- 新增：如果模式过多，进行随机采样 ---
+    if len(patterns_data) > 1000:
+        print(f"模式数量过多 ({len(patterns_data)})，随机采样500个进行分析。")
+        # 为了保持原始的时间顺序，我们先对索引进行采样，然后提取对应的元素
+        sampled_indices = sorted(random.sample(range(len(patterns_data)), 500))
+        patterns_data = [patterns_data[i] for i in sampled_indices]
+
+    # --- 新增：按日期对所有模式进行排序 ---
+    patterns_data.sort(key=lambda p: p['end_date'])
+
+    # --- 优化点 2: 任务创建与分块 ---
+    # 1. 为并行任务准备参数
+    # 每个任务现在是计算一个模式与它之前所有模式的DTW
+    # `indices_to_process` 应该是从1到len-1，因为第0个模式没有历史可比较
+    indices_to_process = range(1, len(patterns_data))
+        
+    tasks = [(i, patterns_data, dtw_columns) for i in indices_to_process]
+
+    # 2. 使用进程池并行执行
+    results = []
+    # 如果模式数量很少，不值得开启多进程
+    if len(patterns_data) < 10:
+        print("模式数量较少，使用单进程计算。")
+        results = [_calculate_dtw_for_chunk(task) for task in tqdm(tasks, desc="Single-process DTW")]
+    else:
+        with Pool() as pool:
+            results = list(tqdm(pool.imap(_calculate_dtw_for_chunk, tasks), total=len(tasks), desc="Parallel DTW (Chunked)"))
+
+    # 3. 直接将结果转换为字典
+    dtw_results_dict = dict(results)
             
-            # 存储当前模式与这个过去模式在各个维度上的DTW距离
-            individual_dtw_distances = []
-
-            for col in dtw_columns:
-                # 提取两个模式的时间序列
-                series1 = current_pattern_df[col].values
-                series2 = past_pattern_df[col].values
-
-                # 计算DTW距离
-                alignment = dtw(series1, series2, distance_only=True)
-                distance = alignment.distance
-                individual_dtw_distances.append(distance)
-                distances_per_column[col].append(distance)
-
-            # 计算五个维度的平均DTW距离
-            if individual_dtw_distances:
-                avg_distance = sum(individual_dtw_distances) / len(individual_dtw_distances)
-                avg_distances_to_past.append(avg_distance)
-
-        # 存储当前模式的分析结果
-        dtw_results_dict[current_pattern_id] = {
-            'code': current_code,
-            'date': current_end_date,
-            'avg_dtw_distances': avg_distances_to_past,
-            'dtw_distances': distances_per_column
-        }
-        
     return dtw_results_dict
-
-def save_patterns_by_date(df: pd.DataFrame, output_path: str):
-    """
-    将 pattern_df 按照每个模式的结束日期进行分组，
-    并将每个日期的所有模式数据保存到 Excel 文件的不同工作表中。
-
-    Args:
-        df (pd.DataFrame): 包含模式数据的 DataFrame，需要有 'pattern_index' 和 'date' 列。
-        output_path (str): 输出的 Excel 文件路径。
-    """
-    print(f"正在将结果按日期保存到 {output_path}...")
-    
-    # 确保日期列是datetime类型
-    df['date'] = pd.to_datetime(df['date'])
-
-    # 找到每个 pattern_index 的结束日期
-    end_dates = df.groupby('pattern_index')['date'].max()
-    
-    # 将结束日期映射回原始 DataFrame
-    df['end_date'] = df['pattern_index'].map(end_dates)
-    
-    # 按结束日期分组
-    grouped = df.groupby('end_date')
-    
-    with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
-        for date, group in tqdm(grouped, desc="Saving patterns by date"):
-            # 将日期格式化为 YYYY-MM-DD 字符串，作为工作表名称
-            sheet_name = date.strftime('%Y-%m-%d')
-            # 将 group 数据写入对应的工作表
-            group.to_excel(writer, sheet_name=sheet_name, index=False)
-    
-    print(f"结果已成功保存到 {output_path}")
 
 def save_patterns_to_sql(df: pd.DataFrame, db_path: str):
     """
@@ -213,38 +212,289 @@ def save_patterns_to_sql(df: pd.DataFrame, db_path: str):
     
     print(f"结果已成功保存到数据库 {db_path}")
 
-if __name__ == "__main__":
-    from prepare import get_stock_merge_table
-    df = get_stock_merge_table(length=220, freq='daily')
-    pattern_df = find_pattern_v1(df, window=20)
+def plot_dtw_results_by_date(results_path='dtw_results.pkl'):
+    """
+    读取DTW结果，按日期排序，计算每个模式与其历史模式的平均DTW距离的均值，并绘制折线图。
+    """
+    print(f"正在从 {results_path} 加载结果并绘图...")
+        
+    # 1. 加载数据
+    try:
+        with open(results_path, 'rb') as f:
+            dtw_results = pickle.load(f)
+    except FileNotFoundError:
+        print(f"错误: 未找到结果文件 {results_path}。请先运行DTW分析。")
+        return
+        
+    if not dtw_results:
+        print("结果文件为空，无法绘图。")
+        return
+
+    # 2. 按照date排列
+    # dtw_results.items() -> [(pattern_id, {'code': ..., 'date': ..., 'avg_dtw_distances': [...]}), ...]
+    # 我们根据字典中的 'date' 键来排序
+    sorted_results = sorted(dtw_results.items(), key=lambda item: item[1]['date'])
+
+    # 3. 取出每个元素的avg_dtw_distances求均值
+    mean_avg_distances = []
+    dates = []
+    for pattern_id, data in sorted_results[-100:]:
+        # 过滤掉没有历史记录的模式（avg_dtw_distances为空列表）
+        if data['avg_dtw_distances']:
+            mean_val = np.mean(data['avg_dtw_distances'])
+            mean_avg_distances.append(mean_val)
+            dates.append(pd.to_datetime(data['date']))
+
+    if not mean_avg_distances:
+        print("没有可供绘图的数据（可能所有模式都没有历史可比较）。")
+        return
+
+    # 4. 画一个折线图
+    plt.figure(figsize=(15, 7))
+    plt.plot(dates, mean_avg_distances, marker='o', linestyle='-', markersize=4)
+        
+    plt.title('Mean of Average DTW Distances of Patterns (Sorted by Date)')
+    plt.xlabel('Date')
+    plt.ylabel('Mean of Average DTW Distances')
+    plt.grid(True)
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+        
+    # 保存图表到文件
+    chart_path = 'dtw_results_by_date.png'
+    plt.savefig(chart_path)
+    print(f"图表已保存到 {chart_path}")
+        
+    # 显示图表
+    plt.show()
+
+def plot_random_queen_histograms(results_path='dtw_results.pkl', num_queens=500):
+    """
+    随机选择N个模式（“皇后”），并为每个模式的avg_dtw_distances绘制直方图。
+    每个直方图展示了一个模式与其所有历史模式的DTW平均距离的分布情况。
+    """
+    print(f"正在从 {results_path} 加载结果并为 {num_queens} 个随机皇后绘制直方图...")
+
+    # 1. 加载数据
+    try:
+        with open(results_path, 'rb') as f:
+            dtw_results = pickle.load(f)
+    except FileNotFoundError:
+        print(f"错误: 未找到结果文件 {results_path}。")
+        return
     
-    # 新增调用：将结果按日期保存到数据库
-    save_patterns_to_sql(pattern_df.copy(), 'patterns.db')
+    if not dtw_results:
+        print("结果文件为空，无法绘图。")
+        return
 
-    # dtw_results = analyze_pattern_dtw(pattern_df)
+    # 2. 随机选择N个“皇后”
+    # 过滤掉那些没有历史可比较的模式（即avg_dtw_distances列表为空的）
+    valid_patterns = {k: v for k, v in dtw_results.items() if v.get('avg_dtw_distances')}
+    
+    if len(valid_patterns) == 0:
+        print("没有找到包含有效历史距离数据的模式。")
+        return
 
-    # # 存储结果到文件
-    # # Convert keys to string because json cannot handle int64 keys
-    # dtw_results_str_keys = {str(k): v for k, v in dtw_results.items()}
-    # with open('dtw_results.json', 'w') as f:
-    #     json.dump(dtw_results_str_keys, f, indent=4)
+    if len(valid_patterns) < num_queens:
+        print(f"有效模式数量 ({len(valid_patterns)}) 少于请求的数量 ({num_queens})，将使用所有有效模式。")
+        num_to_sample = len(valid_patterns)
+    else:
+        num_to_sample = num_queens
 
-    # def total_sorted_results():
-    #     sorted_results = sorted(dtw_results.items(), key=lambda item: len(item[1]['avg_dtw_distances']))
+    # 从有效模式中随机采样
+    random_queens_items = random.sample(list(valid_patterns.items()), num_to_sample)
+    
+    # 提取出皇后的数据，并按日期排序，使图例更有序
+    queens = sorted([item[1] for item in random_queens_items], key=lambda q: q['date'])
 
-    #     mean_avg_distances = []
-    #     for pattern_id, data in sorted_results:
-    #         mean_val = np.mean(data['avg_dtw_distances'])
-    #         mean_avg_distances.append(mean_val)
+    # 3. 绘制直方图
+    plt.figure(figsize=(15, 8))
+    
+    chunk = 10
+    for queen in queens[-chunk:]:
+        distances = queen['avg_dtw_distances']
+        date_str = queen['date']
+        
+        # 使用alpha透明度让重叠的直方图更易读
+        plt.hist(distances, bins=20, alpha=0.6, label=f'Queen from {date_str}')
 
-    #     # 3. 绘制折线图
-    #     plt.figure(figsize=(12, 6))
-    #     plt.plot(range(len(mean_avg_distances)), mean_avg_distances, marker='o', linestyle='-')
-                
-    #     plt.title('Average DTW Distance of Patterns (Sorted by Number of Past Comparisons)')
-    #     plt.xlabel('Pattern Index (Sorted by Ascending Number of Past Patterns)')
-    #     plt.ylabel('Mean of Average DTW Distances')
-    #     plt.grid(True)
-    #     plt.show()
+    plt.title(f'Histograms of Avg DTW Distances for {chunk} Random Queens')
+    plt.xlabel('Average DTW Distance to Past Patterns')
+    plt.ylabel('Frequency')
+    plt.xlim(0, 4)
+    # plt.legend()
+    plt.grid(True, axis='y', linestyle='--', alpha=0.7)
+    plt.tight_layout()
 
-    # total_sorted_results()
+    # 保存图表到文件
+    chart_path = 'dtw_queen_histograms.png'
+    plt.savefig(chart_path)
+    print(f"皇后直方图已保存到 {chart_path}")
+
+    # 显示图表
+    plt.show()
+
+class PatternMatch:
+    def __init__(self, df: pd.DataFrame, window: int = 20):
+        self.df = df
+        self.window = window
+        self.match_cols = ['close', 'open', 'high', 'low', 'volume', 'pctChg']
+        self.diff_cols = [i+'_diff' for i in self.match_cols]
+        self.df = self.df.sort_values(by=['code', 'date']).reset_index(drop=True)
+        self.pct_chg_threshold = 6  # pctChg阈值
+        self.finded_patterns = pd.DataFrame()
+        self.test_patterns = pd.DataFrame()
+
+    def add_pct_chg(self):
+        df = self.df
+        # 按code分组计算'close', 'open', 'high', 'low', 'volume'的日度变化
+        for col in self.match_cols:
+            # groupby('code')保证了每个股票的第一天diff值为NaN
+            df[col+'_diff'] = df.groupby('code')[col].pct_change()
+        self.df = df
+        return df
+
+    def extract_test_pattern(self) -> pd.DataFrame:
+        df = self.df
+        window = self.window
+       
+        # 使用tqdm显示进度
+        tqdm.pandas(desc="Processing stocks")
+
+        # 提取每个股票的最近20天数据
+        test_patterns = df.groupby('code').tail(window)
+        
+        # 过滤掉数据不足window天或包含NaN值的股票以及包含无穷大值的
+        test_patterns = test_patterns.groupby('code').filter(
+            lambda x: len(x) == window and x[self.diff_cols].notna().all().all() and np.isfinite(x[self.diff_cols]).all().all()
+        )
+        # 选择最近20天pctChg绝对值均小于等于6%的股票
+        test_patterns = test_patterns.groupby('code').filter(
+            lambda x: (x['pctChg'].abs() <= self.pct_chg_threshold).all()
+        )
+        test_patterns = test_patterns.sort_values(by=['code', 'date']).reset_index(drop=True)
+        self.test_patterns = test_patterns
+        return test_patterns
+    
+    def find_pattern_v1(self) -> pd.DataFrame:
+        """
+        在一个包含所有股票行情的大表中，提取特定模式的数据。
+
+        模式定义：
+        1. 连续20天内，每日的涨跌幅（pctChg）绝对值不超过6%。
+        2. 在这20天之后的第21天，涨跌幅大于6%。
+
+        Args:
+            df (pd.DataFrame): 包含所有股票数据的DataFrame，
+                            需要包含 'code', 'date', 'pctChg' 列，
+                            并按 'code', 'date' 排序。
+
+        Returns:
+            pd.DataFrame: 一个新的DataFrame，包含所有被提取的模式数据，
+                        并带有一个 'pattern_index' 列。
+        """
+        df = self.df
+        window = self.window
+
+        # 使用tqdm显示进度
+        tqdm.pandas(desc="Processing stocks")
+
+        # 使用groupby和rolling来识别模式
+        # 窗口大小为21，其中前20天用于条件1，第21天用于条件2
+        pattern_indices = df.groupby('code')['pctChg'].progress_apply(
+            lambda x: x.rolling(window=window+1, closed='right', min_periods=window+1).apply(
+                lambda w: (w.iloc[-1] > self.pct_chg_threshold) and (abs(w.iloc[:-1]) <= self.pct_chg_threshold).all(),
+                raw=False
+            )
+        ).fillna(0).astype(bool)
+
+        # 获取满足条件的21天窗口的起始索引
+        pattern_start_indices = df.index[pattern_indices]
+
+        # 提取所有符合条件的20天数据段
+        pattern_dfs = []
+        pattern_id = 0
+        for end_idx in tqdm(pattern_start_indices, desc="Extracting patterns"):
+            start_idx = end_idx - window
+            pattern_chunk = df.iloc[start_idx:end_idx].copy()
+            pattern_chunk['pattern_index'] = pattern_id
+            pattern_dfs.append(pattern_chunk)
+            pattern_id += 1
+
+        # 合并所有模式数据
+        result_df = pd.concat(pattern_dfs, ignore_index=True)
+
+        # 过滤掉数据不足window天或包含NaN值的模式以及包含无穷大值的模式
+        result_df = result_df.groupby('pattern_index').filter(
+            lambda x: len(x) == window and x[self.diff_cols].notna().all().all() and np.isfinite(x[self.diff_cols]).all().all()
+        )
+        result_df = result_df.sort_values(by=['pattern_index', 'date']).reset_index(drop=True)
+        self.finded_patterns = result_df
+        print("找到的模式数量:", result_df['pattern_index'].nunique())
+        return result_df
+
+    def calculate_dtw_stats(self) -> pd.DataFrame:
+        """
+        分布式计算每个test_pattern与所有finded_patterns的DTW距离，并统计中位数。
+        """
+        print("开始计算测试模式与历史模式的DTW统计...")
+
+        dtw_columns = self.diff_cols
+
+        # --- 数据预处理 ---
+        # 1. 预处理 test_patterns
+        test_patterns_data = []
+        for code, group in tqdm(self.test_patterns.groupby('code'), desc="Preprocessing test patterns"):
+            pattern_arrays = {col: group[col].values for col in dtw_columns}
+            test_patterns_data.append({
+                'code': code,
+                'end_date': group['date'].iloc[-1],
+                'arrays': pattern_arrays
+            })
+
+        # 2. 预处理 finded_patterns
+        finded_patterns_data = []
+        for pid in tqdm(self.finded_patterns['pattern_index'].unique(), desc="Preprocessing finded patterns"):
+            pattern_df = self.finded_patterns[self.finded_patterns['pattern_index'] == pid]
+            pattern_arrays = {col: pattern_df[col].values for col in dtw_columns}
+            finded_patterns_data.append({'arrays': pattern_arrays})
+
+        # --- 创建并行任务 ---
+        tasks = [(tp_data, finded_patterns_data, dtw_columns) for tp_data in test_patterns_data]
+
+        # --- 使用进程池并行执行 ---
+        results = []
+        with Pool() as pool:
+            results = list(tqdm(pool.imap(_dtw_worker, tasks), total=len(tasks), desc="Calculating DTW medians"))
+
+        # --- 整理结果 ---
+        valid_results = [res for res in results if res is not None]
+        if not valid_results:
+            print("没有计算出有效的DTW结果。")
+            return pd.DataFrame()
+
+        dtw_stats_df = pd.DataFrame(valid_results)
+        dtw_stats_df = dtw_stats_df.sort_values(by='median_dtw').reset_index(drop=True)
+        
+        print("DTW统计计算完成。")
+        return dtw_stats_df
+
+    def main(self):
+        self.add_pct_chg()
+        self.extract_test_pattern()
+        self.find_pattern_v1()
+        dtw_stats = self.calculate_dtw_stats()
+        print("DTW统计结果：")
+        print(dtw_stats.head())
+        # pickle保存结果
+        with open('dtw_results.pkl', 'wb') as f:
+            pickle.dump(dtw_stats.to_dict(orient='records'), f)
+        return dtw_stats
+
+if __name__ == "__main__":
+    # 示例用法
+    from prepare import get_stock_merge_table
+    df = get_stock_merge_table(220)
+    pattern_matcher = PatternMatch(df, window=30)
+    dtw_stats = pattern_matcher.main()
+    

@@ -180,7 +180,7 @@ def get_stock_merge_table(length=30, freq='daily'):
 
     dflist = []
     for idx, (code, info) in enumerate(stock_data_dict.items()):
-        logger.info(f"merge股票 {code} 进度 {idx+1}/{len(stock_data_dict)} \r")
+        # logger.info(f"merge股票 {code} 进度 {idx+1}/{len(stock_data_dict)} \r")
         df = info['data']
         # 必须包含指定的关键列，便于扩展
         required_columns = ['market_value','date','open','high','low','close','volume','turn','amount','pctChg']
