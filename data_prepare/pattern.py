@@ -408,8 +408,7 @@ class PatternMatch:
 
         def find_pattern_in_window(w):
             # 重新定义窗口大小以适应新的逻辑
-            # 我们需要60天回顾期 + 20天稳定期 + 10天观察期
-
+            # w 现在是一个 Series
             if len(w) != total_window:
                 return False
 
@@ -419,25 +418,18 @@ class PatternMatch:
             future_part = w.iloc[lookback_period + window : total_window]
 
             # 条件0: 过去60天内，涨幅超过阈值的天数至少为3天
-            condition0 = (lookback_part['pctChg'] > self.pct_chg_threshold).sum() >= 3
+            condition0 = (lookback_part > self.pct_chg_threshold).sum() >= 3
             if not condition0:
                 return False
-            # 模式的20天部分
-            pattern_part = w.iloc[0:window]
             
             # 条件1: 20天稳定期内，每日涨跌幅绝对值 <= 阈值
-            condition1 = (pattern_part['pctChg'].abs() <= self.pct_chg_threshold).all()
+            condition1 = (pattern_part.abs() <= self.pct_chg_threshold).all()
 
             if not condition1:
                 return False
-            
-            # 条件2: 未来10天内，最高收盘价 > 当天收盘价 * 1.1
-            # 未来10天的部分
-            future_part = w.iloc[window:total_window]
-            # 当天的收盘价，即20天模式的最后一天
-            current_close = pattern_part['close'].iloc[-1]
-            highest_future_close = future_part['close'].max()
-            condition2 = highest_future_close >= (current_close * 1.1)
+
+            # 条件2: 未来10天内，pctChg累计涨幅 > 9.85
+            condition2 = future_part.sum() >= 9.85
             if not condition2:
                 return False
 
@@ -445,25 +437,37 @@ class PatternMatch:
 
         # 对每个股票分组应用滚动窗口
         # 使用 progress_apply 来显示进度
-        pattern_indices = df.groupby('code').progress_apply(
+        # 只对 pctChg 列进行滚动操作
+        pattern_indices = df.groupby('code')['pctChg'].progress_apply(
             lambda x: x.rolling(window=total_window, min_periods=total_window)
                    .apply(find_pattern_in_window, raw=False)
         ).fillna(0).astype(bool)
 
-        # 获取满足条件的21天窗口的起始索引
-        pattern_start_indices = df.index[pattern_indices]
+        # 获取满足条件的窗口的结束索引
+        pattern_end_indices = df.index[pattern_indices]
 
         # 提取所有符合条件的20天数据段
         pattern_dfs = []
         pattern_id = 0
-        for end_idx in tqdm(pattern_start_indices, desc="Extracting patterns"):
-            start_idx = end_idx - window
-            pattern_chunk = df.iloc[start_idx:end_idx].copy()
-            pattern_chunk['pattern_index'] = pattern_id
-            pattern_dfs.append(pattern_chunk)
-            pattern_id += 1
+        # --- 修复：索引逻辑调整，end_idx是窗口的最后一天，start_idx是模式的开始 ---
+        for end_idx in tqdm(pattern_end_indices, desc="Extracting patterns"):
+            # 模式的20天在 total_window 的中间部分
+            pattern_start_idx = end_idx - future_look_period - window + 1
+            pattern_end_idx = end_idx - future_look_period + 1
+            pattern_chunk = df.iloc[pattern_start_idx:pattern_end_idx].copy()
+            
+            # 确保提取的长度正确
+            if len(pattern_chunk) == window:
+                pattern_chunk['pattern_index'] = pattern_id
+                pattern_dfs.append(pattern_chunk)
+                pattern_id += 1
 
         # 合并所有模式数据
+        if not pattern_dfs:
+            print("未找到任何满足条件的模式。")
+            self.finded_patterns = pd.DataFrame()
+            return self.finded_patterns
+            
         result_df = pd.concat(pattern_dfs, ignore_index=True)
 
         # 过滤掉数据不足window天或包含NaN值的模式以及包含无穷大值的模式
@@ -575,4 +579,3 @@ if __name__ == "__main__":
     #     print("错误: 未找到 'dtw_results.pkl' 文件。请确保之前的步骤已成功运行并生成了该文件。")
     # except Exception as e:
     #     print(f"加载或处理文件时发生错误: {e}")
-    
