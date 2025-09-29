@@ -399,23 +399,55 @@ class PatternMatch:
         # 使用tqdm显示进度
         tqdm.pandas(desc="Processing stocks")
 
-        # 使用groupby和rolling来识别模式
-        # 窗口大小为21，其中前20天用于条件1，第21天用于条件2
+        # 为了在lambda中同时使用'pctChg'和'close'，我们需要对整个DataFrame进行滚动
+        # 这比只滚动一个Series要慢，但对于多列逻辑是必需的
+        # 我们创建一个辅助函数来处理每个窗口
         lookback_period = 60
-        total_window = lookback_period + window + 1
+        future_look_period = 10
+        total_window = lookback_period + window + future_look_period
 
-        pattern_indices = df.groupby('code')['pctChg'].progress_apply(
-            lambda x: x.rolling(window=total_window, closed='right', min_periods=total_window).apply(
-            lambda w: (
-                # 1. 最近60天内，存在至少一天涨跌幅绝对值 > 阈值
-                (abs(w.iloc[0:lookback_period]) > self.pct_chg_threshold).any() and
-                # 2. 随后的20天（window），所有天涨跌幅绝对值 <= 阈值
-                (abs(w.iloc[lookback_period:-1]) <= self.pct_chg_threshold).all() and
-                # 3. 第21天，涨跌幅 > 阈值
-                (w.iloc[-1] > self.pct_chg_threshold)
-            ),
-            raw=False
-            )
+        def find_pattern_in_window(w):
+            # 重新定义窗口大小以适应新的逻辑
+            # 我们需要60天回顾期 + 20天稳定期 + 10天观察期
+
+            if len(w) != total_window:
+                return False
+
+            # 将窗口划分为三部分
+            lookback_part = w.iloc[0:lookback_period]
+            pattern_part = w.iloc[lookback_period : lookback_period + window]
+            future_part = w.iloc[lookback_period + window : total_window]
+
+            # 条件0: 过去60天内，涨幅超过阈值的天数至少为3天
+            condition0 = (lookback_part['pctChg'] > self.pct_chg_threshold).sum() >= 3
+            if not condition0:
+                return False
+            # 模式的20天部分
+            pattern_part = w.iloc[0:window]
+            
+            # 条件1: 20天稳定期内，每日涨跌幅绝对值 <= 阈值
+            condition1 = (pattern_part['pctChg'].abs() <= self.pct_chg_threshold).all()
+
+            if not condition1:
+                return False
+            
+            # 条件2: 未来10天内，最高收盘价 > 当天收盘价 * 1.1
+            # 未来10天的部分
+            future_part = w.iloc[window:total_window]
+            # 当天的收盘价，即20天模式的最后一天
+            current_close = pattern_part['close'].iloc[-1]
+            highest_future_close = future_part['close'].max()
+            condition2 = highest_future_close >= (current_close * 1.1)
+            if not condition2:
+                return False
+
+            return True
+
+        # 对每个股票分组应用滚动窗口
+        # 使用 progress_apply 来显示进度
+        pattern_indices = df.groupby('code').progress_apply(
+            lambda x: x.rolling(window=total_window, min_periods=total_window)
+                   .apply(find_pattern_in_window, raw=False)
         ).fillna(0).astype(bool)
 
         # 获取满足条件的21天窗口的起始索引
