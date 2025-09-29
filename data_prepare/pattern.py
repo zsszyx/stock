@@ -362,15 +362,16 @@ class PatternMatch:
         tqdm.pandas(desc="Processing stocks")
 
         # 提取每个股票的最近20天数据
-        test_patterns = df.groupby('code').tail(window)
+        test_patterns = df.groupby('code').tail(window+60)
         
         # 过滤掉数据不足window天或包含NaN值的股票以及包含无穷大值的
         test_patterns = test_patterns.groupby('code').filter(
-            lambda x: len(x) == window and x[self.diff_cols].notna().all().all() and np.isfinite(x[self.diff_cols]).all().all()
+            lambda x: x[self.diff_cols].tail(window).notna().all().all() and np.isfinite(x[self.diff_cols].tail(window)).all().all()
         )
         # 选择最近20天pctChg绝对值均小于等于6%的股票
         test_patterns = test_patterns.groupby('code').filter(
-            lambda x: (x['pctChg'].abs() <= self.pct_chg_threshold).all()
+            lambda x: (x['pctChg'].tail(window).abs() <= self.pct_chg_threshold).all() and
+                  (x['pctChg'].head(60) >= self.pct_chg_threshold).sum() >= 3
         )
         test_patterns = test_patterns.sort_values(by=['code', 'date']).reset_index(drop=True)
         self.test_patterns = test_patterns
@@ -418,7 +419,7 @@ class PatternMatch:
             future_part = w.iloc[lookback_period + window : total_window]
 
             # 条件0: 过去60天内，涨幅超过阈值的天数至少为3天
-            condition0 = (lookback_part > self.pct_chg_threshold).sum() >= 3
+            condition0 = (lookback_part >= self.pct_chg_threshold).sum() >= 3
             if not condition0:
                 return False
             
