@@ -345,7 +345,7 @@ class PatternMatch:
         self.look_back_period = 60
         self.future_look_period = 10
         self.look_back_chg_count = 3
-        self.feature_retuen = 9.85
+        self.feature_return = 9.85
         self.finded_patterns = pd.DataFrame()
         self.test_patterns = pd.DataFrame()
 
