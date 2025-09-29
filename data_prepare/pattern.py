@@ -342,6 +342,10 @@ class PatternMatch:
         self.diff_cols = [i+'_diff' for i in self.match_cols]
         self.df = self.df.sort_values(by=['code', 'date']).reset_index(drop=True)
         self.pct_chg_threshold = 6  # pctChg阈值
+        self.look_back_period = 60
+        self.future_look_period = 10
+        self.look_back_chg_count = 3
+        self.feature_retuen = 9.85
         self.finded_patterns = pd.DataFrame()
         self.test_patterns = pd.DataFrame()
 
@@ -362,18 +366,25 @@ class PatternMatch:
         tqdm.pandas(desc="Processing stocks")
 
         # 提取每个股票的最近20天数据
-        test_patterns = df.groupby('code').tail(window+60)
+        test_patterns = df.groupby('code').tail(window+self.look_back_period)
         
-        # 过滤掉数据不足window天或包含NaN值的股票以及包含无穷大值的
-        test_patterns = test_patterns.groupby('code').filter(
-            lambda x: x[self.diff_cols].tail(window).notna().all().all() and np.isfinite(x[self.diff_cols].tail(window)).all().all()
-        )
         # 选择最近20天pctChg绝对值均小于等于6%的股票
         test_patterns = test_patterns.groupby('code').filter(
             lambda x: (x['pctChg'].tail(window).abs() <= self.pct_chg_threshold).all() and
-                  (x['pctChg'].head(60) >= self.pct_chg_threshold).sum() >= 3
+                  (x['pctChg'].head(self.look_back_period) >= self.pct_chg_threshold).sum() >= self.look_back_chg_count
         )
+
         test_patterns = test_patterns.sort_values(by=['code', 'date']).reset_index(drop=True)
+
+        test_patterns = df.groupby('code').tail(self.window)
+
+        # 过滤掉数据不足window天或包含NaN值的股票以及包含无穷大值的
+        test_patterns = test_patterns.groupby('code').filter(
+            lambda x: x[self.diff_cols].notna().all().all() and np.isfinite(x[self.diff_cols]).all().all()
+        )
+
+        test_patterns = test_patterns.sort_values(by=['code', 'date']).reset_index(drop=True)
+
         self.test_patterns = test_patterns
         return test_patterns
     
@@ -403,8 +414,8 @@ class PatternMatch:
         # 为了在lambda中同时使用'pctChg'和'close'，我们需要对整个DataFrame进行滚动
         # 这比只滚动一个Series要慢，但对于多列逻辑是必需的
         # 我们创建一个辅助函数来处理每个窗口
-        lookback_period = 60
-        future_look_period = 10
+        lookback_period = self.look_back_period
+        future_look_period = self.future_look_period
         total_window = lookback_period + window + future_look_period
 
         def find_pattern_in_window(w):
@@ -419,7 +430,7 @@ class PatternMatch:
             future_part = w.iloc[lookback_period + window : total_window]
 
             # 条件0: 过去60天内，涨幅超过阈值的天数至少为3天
-            condition0 = (lookback_part >= self.pct_chg_threshold).sum() >= 3
+            condition0 = (lookback_part >= self.pct_chg_threshold).sum() >= self.look_back_chg_count
             if not condition0:
                 return False
             
@@ -430,7 +441,7 @@ class PatternMatch:
                 return False
 
             # 条件2: 未来10天内，pctChg累计涨幅 > 9.85
-            condition2 = future_part.sum() >= 9.85
+            condition2 = future_part.sum() >= self.feature_return
             if not condition2:
                 return False
 
