@@ -187,6 +187,9 @@ def get_stock_merge_table(length=30, freq='daily'):
         if not all(col in df.columns for col in required_columns):
             logger.warning(f"{code} 数据缺失关键列，已跳过")
             continue
+        if len(df) != length:
+            logger.warning(f"{code} 数据长度 {len(df)} 不等于指定长度 {length}，已跳过")
+            continue
         df['code'] = code
         dflist.append(df)
     if not dflist:
