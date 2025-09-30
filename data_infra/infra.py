@@ -79,6 +79,7 @@ def fetch_stock_list(start_date=None, end_date=None):
     logger.info(f"获取 {end_date} 的股票列表")
     rs = bs.query_all_stock(end_date)
     df = rs.get_data()
+    index_df = df[df['code'].str.startswith(('sh.000', 'sz.399'))]
     df = df[~df['code'].str.startswith(('sh.000', 'sz.399'))]
     df = df[~df['code_name'].str.contains(r'\*|ST|S|退')]
     # df = df[df['code'].str.startswith(('sh.688', 'sz.300'))]  # 科创板和创业板
@@ -87,7 +88,7 @@ def fetch_stock_list(start_date=None, end_date=None):
         raise ValueError("股票代码中存在空值, 或者获取的股票列表为空")
     # 增加一行上证指数
     df = pd.concat([pd.DataFrame([{'code': 'sh.000001', 'code_name': '上证指数'}]), df], ignore_index=True)
-    return df['code'], df['code_name']
+    return df['code'], df['code_name'], index_df['code'], index_df['code_name']
 
 def fetch_daily_kline(code, start_date=None, end_date=None, adjustflag="2"):
     """获取股票日K线前复权数据
@@ -232,7 +233,7 @@ def update_stock_kline(conn, cursor, freq='daily', codes=None, force_update=Fals
     existing_tables = get_table_info_from_db(conn, cursor)
     existing_tables = {k: v for k, v in existing_tables.items() if v['freq'] == freq}
 
-    codes, names = fetch_stock_list(end_date=today)
+    codes, names, index_code, index_name = fetch_stock_list(end_date=today)
     # 先更新行业分类数据
     update_industry(conn, cursor, today)
 
