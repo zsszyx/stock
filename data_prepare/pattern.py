@@ -341,7 +341,7 @@ class PatternMatch:
         self.match_cols = ['close', 'open', 'high', 'low', 'volume', 'pctChg']
         self.diff_cols = [i+'_diff' for i in self.match_cols]
         self.df = self.df.sort_values(by=['code', 'date']).reset_index(drop=True)
-        self.pct_chg_threshold = 6  # pctChg阈值
+        self.pct_chg_threshold = 5  # pctChg阈值
         self.look_back_period = 60
         self.future_look_period = 10
         self.look_back_chg_count = 3
