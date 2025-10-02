@@ -562,11 +562,7 @@ if __name__ == "__main__":
     pattern_matcher = PatternMatch(df, window=30)
     dtw_stats = pattern_matcher.main()
 
-<<<<<<< HEAD
     # 从文件加载DTW统计结果并进行分析
-=======
-    # # 从文件加载DTW统计结果并进行分析
->>>>>>> 72014bf (1)
     # print("\n--- 从文件加载并分析DTW统计结果 ---")
     # try:
     #     with open('dtw_results.pkl', 'rb') as f:
@@ -595,7 +591,3 @@ if __name__ == "__main__":
     #     print("错误: 未找到 'dtw_results.pkl' 文件。请确保之前的步骤已成功运行并生成了该文件。")
     # except Exception as e:
     #     print(f"加载或处理文件时发生错误: {e}")
-<<<<<<< HEAD
-=======
-    
->>>>>>> 72014bf (1)
