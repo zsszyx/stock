@@ -543,6 +543,205 @@ class PatternMatch:
         print("DTW统计计算完成。")
         return dtw_stats_df
 
+    # 标记潜伏期
+    def mark_latent_period(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        标记潜伏期模式。
+        潜伏期定义：
+        1. 在过去40天内，有至少3天的涨幅（pctChg）大于等于5%。
+        2. 在最近20天内，所有天的涨幅都小于5%。
+        
+        Args:
+            df (pd.DataFrame): 包含股票数据的DataFrame，需要有 'code', 'date', 'pctChg' 列。
+
+        Returns:
+            pd.DataFrame: 带有 'is_latent' 布尔列的原始DataFrame。
+        """
+        print("正在标记潜伏期模式...")
+        
+        # 确保数据按股票和日期排序
+        df = df.sort_values(by=['code', 'date']).reset_index(drop=True)
+        
+        # 定义窗口大小
+        past_window = 40
+        recent_window = 20
+        total_window = past_window + recent_window
+        
+        # 定义涨幅阈值和天数阈值
+        pct_chg_threshold = 5
+        day_count_threshold = 3
+
+        # 定义一个函数来应用于每个滚动窗口
+        def check_latent_period(window_pct_chg: pd.Series) -> bool:
+            if len(window_pct_chg) != total_window:
+                return False
+            
+            # 划分过去和最近的窗口
+            past_period = window_pct_chg.iloc[:past_window]
+            recent_period = window_pct_chg.iloc[past_window:]
+            
+            # 条件1: 过去40天有至少3天涨幅 >= 5%
+            condition1 = (past_period >= pct_chg_threshold).sum() >= day_count_threshold
+            
+            # 条件2: 最近20天所有涨幅 < 5%
+            condition2 = (recent_period < pct_chg_threshold).all()
+            
+            return condition1 and condition2
+
+        # 对每个股票分组应用滚动窗口检查
+        # 使用 progress_apply 显示进度
+        tqdm.pandas(desc="Marking latent period")
+        latent_flags = df.groupby('code')['pctChg'].progress_apply(
+            lambda x: x.rolling(window=total_window, min_periods=total_window)
+                   .apply(check_latent_period, raw=False)
+        ).fillna(0).astype(bool)
+        
+        # 将结果（MultiIndex Series）的索引重置，以便与原始df对齐
+        latent_flags = latent_flags.reset_index(level=0, drop=True)
+        
+        # 将标记添加到原始DataFrame中
+        df['is_latent'] = latent_flags
+        
+        print("潜伏期标记完成。")
+        return df
+    
+    # 标记潜伏后上涨
+    def mark_latent_rise(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        标记潜伏期后上涨的模式。
+        条件：
+        1. 当前行 'is_latent' 为 True。
+        2. 从当前行开始的未来10天（不含当天），累计涨幅大于等于 9.85%。
+           累计涨幅计算方式为 (1+r1)*(1+r2)*...*(1+r10) - 1 >= 0.0985
+
+        Args:
+            df (pd.DataFrame): 包含 'is_latent' 和 'pctChg' 列的DataFrame。
+
+        Returns:
+            pd.DataFrame: 带有 'is_latent_rise' 布尔列的DataFrame。
+        """
+        print("正在标记潜伏后上涨模式...")
+        
+        # 确保 'is_latent' 列存在
+        if 'is_latent' not in df.columns:
+            print("错误: 'is_latent' 列不存在。请先运行 mark_latent_period 方法。")
+            df['is_latent_rise'] = False
+            return df
+
+        # 定义未来窗口和涨幅阈值
+        future_window = 10
+        rise_threshold = 1.0985  # 对应 9.85% 的涨幅 (1 + 9.85/100)
+
+        # 初始化结果列
+        df['is_latent_rise'] = False
+
+        # 找到所有潜伏期的索引
+        latent_indices = df.index[df['is_latent']].tolist()
+
+        if not latent_indices:
+            print("未找到任何潜伏期模式，无法标记上涨。")
+            return df
+
+        # 对每个股票分组进行操作，以确保未来数据属于同一股票
+        # 使用 progress_apply 显示进度
+        tqdm.pandas(desc="Marking latent rise")
+        
+        def mark_rise_for_group(group):
+            # 如果组内没有潜伏期，直接返回
+            group_latent_indices = group.index.intersection(latent_indices)
+            if group_latent_indices.empty:
+                return group
+
+            # 将 pctChg 转换为比率形式 (e.g., 5% -> 1.05)
+            pct_chg_ratio = 1 + group['pctChg'] / 100
+            
+            # 遍历组内的每个潜伏期索引
+            for idx in group_latent_indices:
+                # 获取当前索引在 group 内的相对位置
+                loc = group.index.get_loc(idx)
+            
+                # 检查是否有足够的未来数据
+                if loc + 1 + future_window <= len(group):
+                    # 提取未来10天的数据
+                    future_returns = pct_chg_ratio.iloc[loc + 1 : loc + 1 + future_window]
+                
+                    # 计算累计乘积
+                    cumulative_product = future_returns.prod()
+                    
+                    # 如果满足上涨条件，则标记
+                    if cumulative_product >= rise_threshold:
+                        group.loc[idx, 'is_latent_rise'] = True
+            return group
+
+        # 应用函数到每个股票分组
+        df = df.groupby('code', group_keys=False).progress_apply(mark_rise_for_group)
+        
+        print(f"潜伏后上涨模式标记完成。共标记 {df['is_latent_rise'].sum()} 个。")
+        return df
+
+    # 标记潜伏后下跌
+    def mark_latent_fall(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        标记潜伏期后下跌的模式。
+        条件：
+        1. 当前行 'is_latent' 为 True。
+        2. 从当前行开始的未来10天（不含当天），累计跌幅大于等于 5%。
+            即累计收益乘积 <= 0.95。
+
+        Args:
+            df (pd.DataFrame): 包含 'is_latent' 和 'pctChg' 列的DataFrame。
+
+        Returns:
+            pd.DataFrame: 带有 'is_latent_fall' 布尔列的DataFrame。
+        """
+        print("正在标记潜伏后下跌模式...")
+            
+        # 确保 'is_latent' 列存在
+        if 'is_latent' not in df.columns:
+            print("错误: 'is_latent' 列不存在。请先运行 mark_latent_period 方法。")
+            df['is_latent_fall'] = False
+            return df
+
+        # 定义未来窗口和跌幅阈值
+        future_window = 10
+        fall_threshold = 0.95  # 对应 5% 的跌幅
+
+        # 初始化结果列
+        df['is_latent_fall'] = False
+
+        # 找到所有潜伏期的索引
+        latent_indices = df.index[df['is_latent']].tolist()
+
+        if not latent_indices:
+            print("未找到任何潜伏期模式，无法标记下跌。")
+            return df
+
+        # 对每个股票分组进行操作
+        tqdm.pandas(desc="Marking latent fall")
+        
+        def mark_fall_for_group(group):
+            group_latent_indices = group.index.intersection(latent_indices)
+            if group_latent_indices.empty:
+                return group
+
+            pct_chg_ratio = 1 + group['pctChg'] / 100
+                
+            for idx in group_latent_indices:
+                loc = group.index.get_loc(idx)
+                
+                if loc + 1 + future_window <= len(group):
+                    future_returns = pct_chg_ratio.iloc[loc + 1 : loc + 1 + future_window]
+                    cumulative_product = future_returns.prod()
+                    
+                if cumulative_product <= fall_threshold:
+                    group.loc[idx, 'is_latent_fall'] = True
+            return group
+
+        df = df.groupby('code', group_keys=False).progress_apply(mark_fall_for_group)
+            
+        print(f"潜伏后下跌模式标记完成。共标记 {df['is_latent_fall'].sum()} 个。")
+        return df
+    
     def main(self):
         self.add_pct_chg()
         self.extract_test_pattern()
