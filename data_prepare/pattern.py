@@ -40,7 +40,7 @@ def _calculate_dtw_for_chunk(args):
             series2_clean = series2[~np.isnan(series2).any(axis=1)]
 
             if len(series1_clean) != 20 or len(series2_clean) != 20:
-                distance = np.inf
+                continue
             else:
                 # 标准化
                 # series1_scaled = scaler.fit_transform(series1_clean.reshape(-1, 1)).flatten()
@@ -95,6 +95,43 @@ def _dtw_worker(args):
         'code': test_pattern_data['code'],
         'date': test_pattern_data['end_date'],
         'median_dtw': median_dtw
+    }
+
+# --- 新增：用于评估涨跌模式相似度的独立工作函数 ---
+def _similarity_worker(args):
+    """
+    计算一个源模式与一组目标模式之间的DTW距离统计。
+    """
+    source_pattern_data, target_patterns_data, dtw_columns = args
+    
+    distances = []
+    for target_pattern_data in target_patterns_data:
+        pair_distances = []
+        for col in dtw_columns:
+            series1 = source_pattern_data['arrays'][col].reshape(-1, 1)
+            series2 = target_pattern_data['arrays'][col].reshape(-1, 1)
+
+            # 确保数据是20天，否则距离为无穷大
+            if len(series1) != 20 or len(series2) != 20:
+                continue
+            else:
+                distance, _ = fastdtw(series1, series2, dist=euclidean)
+            pair_distances.append(distance)
+        
+        if pair_distances:
+            avg_pair_distance = np.mean(pair_distances)
+            distances.append(avg_pair_distance)
+
+    if not distances:
+        return None
+    
+    return {
+        'code': source_pattern_data['code'],
+        'date': source_pattern_data['end_date'],
+        'mean_dtw': np.mean(distances),
+        'median_dtw': np.median(distances),
+        'min_dtw': np.min(distances),
+        'max_dtw': np.max(distances)
     }
 
 def analyze_pattern_dtw(result_df: pd.DataFrame) -> dict:
@@ -543,204 +580,166 @@ class PatternMatch:
         print("DTW统计计算完成。")
         return dtw_stats_df
 
-    # 标记潜伏期
-    def mark_latent_period(self, df: pd.DataFrame) -> pd.DataFrame:
+    def find_latent_patterns(self, rise_threshold=1.0985, fall_threshold=0.95, future_window=10):
         """
-        标记潜伏期模式。
-        潜伏期定义：
-        1. 在过去40天内，有至少3天的涨幅（pctChg）大于等于5%。
-        2. 在最近20天内，所有天的涨幅都小于5%。
-        
-        Args:
-            df (pd.DataFrame): 包含股票数据的DataFrame，需要有 'code', 'date', 'pctChg' 列。
-
-        Returns:
-            pd.DataFrame: 带有 'is_latent' 布尔列的原始DataFrame。
+        重构潜伏模式提取逻辑。
+        1. 识别当前pctChg绝对值大于5的日期（T_end）。
+        2. 往前找到上一个pctChg绝对值大于5的日期（T_start）。
+        3. 中间序列为潜伏期，需至少20天。
+        4. 如果超过20天，只取最近20天。
+        5. 根据潜伏期结束后的未来10天表现，标记为“上涨”或“下跌”模式。
         """
-        print("正在标记潜伏期模式...")
+        print("正在使用新逻辑提取潜伏模式...")
+        self.add_pct_chg() # 确保pctChg列存在
         
-        # 确保数据按股票和日期排序
-        df = df.sort_values(by=['code', 'date']).reset_index(drop=True)
-        
-        # 定义窗口大小
-        past_window = 40
-        recent_window = 20
-        total_window = past_window + recent_window
-        
-        # 定义涨幅阈值和天数阈值
-        pct_chg_threshold = 5
-        day_count_threshold = 3
+        all_rise_patterns = []
+        all_fall_patterns = []
+        pattern_id = 0
 
-        # 定义一个函数来应用于每个滚动窗口
-        def check_latent_period(window_pct_chg: pd.Series) -> bool:
-            if len(window_pct_chg) != total_window:
-                return False
-            
-            # 划分过去和最近的窗口
-            past_period = window_pct_chg.iloc[:past_window]
-            recent_period = window_pct_chg.iloc[past_window:]
-            
-            # 条件1: 过去40天有至少3天涨幅 >= 5%
-            condition1 = (past_period >= pct_chg_threshold).sum() >= day_count_threshold
-            
-            # 条件2: 最近20天所有涨幅 < 5%
-            condition2 = (recent_period < pct_chg_threshold).all()
-            
-            return condition1 and condition2
+        # 对每支股票进行独立分析
+        for code, group in tqdm(self.df.groupby('code'), desc="Finding latent patterns"):
+            # 找到所有波动剧烈的点的索引
+            volatility_indices = group.index[group['pctChg'].abs() > self.pct_chg_threshold]
 
-        # 对每个股票分组应用滚动窗口检查
-        # 使用 progress_apply 显示进度
-        tqdm.pandas(desc="Marking latent period")
-        latent_flags = df.groupby('code')['pctChg'].progress_apply(
-            lambda x: x.rolling(window=total_window, min_periods=total_window)
-                   .apply(check_latent_period, raw=False)
-        ).fillna(0).astype(bool)
-        
-        # 将结果（MultiIndex Series）的索引重置，以便与原始df对齐
-        latent_flags = latent_flags.reset_index(level=0, drop=True)
-        
-        # 将标记添加到原始DataFrame中
-        df['is_latent'] = latent_flags
-        
-        print("潜伏期标记完成。")
-        return df
-    
-    # 标记潜伏后上涨
-    def mark_latent_rise(self, df: pd.DataFrame) -> pd.DataFrame:
-        """
-        标记潜伏期后上涨的模式。
-        条件：
-        1. 当前行 'is_latent' 为 True。
-        2. 从当前行开始的未来10天（不含当天），累计涨幅大于等于 9.85%。
-           累计涨幅计算方式为 (1+r1)*(1+r2)*...*(1+r10) - 1 >= 0.0985
+            if len(volatility_indices) < 2:
+                continue
 
-        Args:
-            df (pd.DataFrame): 包含 'is_latent' 和 'pctChg' 列的DataFrame。
+            # 遍历每两个连续的剧烈波动点
+            for i in range(len(volatility_indices) - 1):
+                t_start_idx = volatility_indices[i]
+                t_end_idx = volatility_indices[i+1]
 
-        Returns:
-            pd.DataFrame: 带有 'is_latent_rise' 布尔列的DataFrame。
-        """
-        print("正在标记潜伏后上涨模式...")
-        
-        # 确保 'is_latent' 列存在
-        if 'is_latent' not in df.columns:
-            print("错误: 'is_latent' 列不存在。请先运行 mark_latent_period 方法。")
-            df['is_latent_rise'] = False
-            return df
-
-        # 定义未来窗口和涨幅阈值
-        future_window = 10
-        rise_threshold = 1.0985  # 对应 9.85% 的涨幅 (1 + 9.85/100)
-
-        # 初始化结果列
-        df['is_latent_rise'] = False
-
-        # 找到所有潜伏期的索引
-        latent_indices = df.index[df['is_latent']].tolist()
-
-        if not latent_indices:
-            print("未找到任何潜伏期模式，无法标记上涨。")
-            return df
-
-        # 对每个股票分组进行操作，以确保未来数据属于同一股票
-        # 使用 progress_apply 显示进度
-        tqdm.pandas(desc="Marking latent rise")
-        
-        def mark_rise_for_group(group):
-            # 如果组内没有潜伏期，直接返回
-            group_latent_indices = group.index.intersection(latent_indices)
-            if group_latent_indices.empty:
-                return group
-
-            # 将 pctChg 转换为比率形式 (e.g., 5% -> 1.05)
-            pct_chg_ratio = 1 + group['pctChg'] / 100
-            
-            # 遍历组内的每个潜伏期索引
-            for idx in group_latent_indices:
-                # 获取当前索引在 group 内的相对位置
-                loc = group.index.get_loc(idx)
-            
-                # 检查是否有足够的未来数据
-                if loc + 1 + future_window <= len(group):
-                    # 提取未来10天的数据
-                    future_returns = pct_chg_ratio.iloc[loc + 1 : loc + 1 + future_window]
+                # 潜伏期是两个波动点之间的序列
+                latent_period_full = group.loc[t_start_idx + 1 : t_end_idx - 1]
                 
-                    # 计算累计乘积
-                    cumulative_product = future_returns.prod()
+                # 条件1: 潜伏期至少20天
+                if len(latent_period_full) >= self.window:
+                    # 条件2: 如果超长，只取最近20天
+                    pattern_df = latent_period_full.tail(self.window).copy()
+
+                    # 检查提取的20天pattern是否有效
+                    if len(pattern_df) != self.window or pattern_df[self.diff_cols].isnull().values.any() or pattern_df[self.diff_cols].isin([np.inf, -np.inf]).values.any():
+                        continue
+
+                    # --- 检查未来表现 ---
+                    # 潜伏期结束点是 t_end_idx - 1
+                    future_start_loc = group.index.get_loc(t_end_idx)
                     
-                    # 如果满足上涨条件，则标记
+                    # 检查是否有足够的未来数据
+                    if future_start_loc + future_window > len(group):
+                        continue
+                    
+                    future_df = group.iloc[future_start_loc : future_start_loc + future_window]
+                    pct_chg_ratio = 1 + future_df['pctChg'] / 100
+                    cumulative_product = pct_chg_ratio.prod()
+
+                    pattern_df['pattern_index'] = pattern_id
+                    
+                    # 判断是上涨还是下跌模式
                     if cumulative_product >= rise_threshold:
-                        group.loc[idx, 'is_latent_rise'] = True
-            return group
+                        all_rise_patterns.append(pattern_df)
+                        pattern_id += 1
+                    elif cumulative_product <= fall_threshold:
+                        all_fall_patterns.append(pattern_df)
+                        pattern_id += 1
 
-        # 应用函数到每个股票分组
-        df = df.groupby('code', group_keys=False).progress_apply(mark_rise_for_group)
+        rise_df = pd.concat(all_rise_patterns, ignore_index=True) if all_rise_patterns else pd.DataFrame()
+        fall_df = pd.concat(all_fall_patterns, ignore_index=True) if all_fall_patterns else pd.DataFrame()
+
+        print(f"找到 {rise_df['pattern_index'].nunique()} 个上涨模式和 {fall_df['pattern_index'].nunique()} 个下跌模式。")
         
-        print(f"潜伏后上涨模式标记完成。共标记 {df['is_latent_rise'].sum()} 个。")
-        return df
+        return rise_df, fall_df
 
-    # 标记潜伏后下跌
-    def mark_latent_fall(self, df: pd.DataFrame) -> pd.DataFrame:
+    def evaluate_rise_fall_similarity(self):
         """
-        标记潜伏期后下跌的模式。
-        条件：
-        1. 当前行 'is_latent' 为 True。
-        2. 从当前行开始的未来10天（不含当天），累计跌幅大于等于 5%。
-            即累计收益乘积 <= 0.95。
-
-        Args:
-            df (pd.DataFrame): 包含 'is_latent' 和 'pctChg' 列的DataFrame。
-
-        Returns:
-            pd.DataFrame: 带有 'is_latent_fall' 布尔列的DataFrame。
+        使用fastdtw分布式计算，评估所有“潜伏后上升”模式和“潜伏后下跌”模式之间的相似度与差异性。
+        (已更新为使用新的 find_latent_patterns 方法)
         """
-        print("正在标记潜伏后下跌模式...")
+        print("开始评估 '潜伏后上升' vs '潜伏后下跌' 模式的相似性...")
+
+        # 1. 使用新方法直接获取上涨和下跌模式
+        rise_patterns_df, fall_patterns_df = self.find_latent_patterns()
+
+        if rise_patterns_df.empty or fall_patterns_df.empty:
+            print("错误：上涨模式或下跌模式不足，无法进行比较。")
+            return
+
+        # 2. 提取模式数据
+        dtw_columns = self.diff_cols
+
+        def extract_patterns_data(df, pattern_type):
+            patterns_data = []
+            for pid in tqdm(df['pattern_index'].unique(), desc=f"Preprocessing {pattern_type} patterns"):
+                pattern_df = df[df['pattern_index'] == pid]
+                pattern_arrays = {col: pattern_df[col].values for col in dtw_columns}
+                patterns_data.append({
+                    'code': pattern_df['code'].iloc[-1],
+                    'end_date': pattern_df['date'].iloc[-1],
+                    'arrays': pattern_arrays
+                })
+            return patterns_data
+
+        rise_patterns_data = extract_patterns_data(rise_patterns_df, "rise")
+        fall_patterns_data = extract_patterns_data(fall_patterns_df, "fall")
+
+        if not rise_patterns_data or not fall_patterns_data:
+            print("错误：有效数据提取后，上升或下跌模式为空。")
+            return
+
+        # 3. 创建并行任务 (与之前相同)
+        tasks1 = [(rp_data, fall_patterns_data, dtw_columns) for rp_data in rise_patterns_data]
+        tasks2 = [(fp_data, rise_patterns_data, dtw_columns) for fp_data in fall_patterns_data]
+        tasks3 = [(rise_patterns_data[i], rise_patterns_data[:i] + rise_patterns_data[i+1:], dtw_columns) for i in range(len(rise_patterns_data))]
+        tasks4 = [(fall_patterns_data[i], fall_patterns_data[:i] + fall_patterns_data[i+1:], dtw_columns) for i in range(len(fall_patterns_data))]
+
+        # 4. 执行并行计算 (与之前相同)
+        with Pool() as pool:
+            print("\n计算 '上升模式' vs '所有下跌模式' 的DTW...")
+            results1 = list(tqdm(pool.imap(_similarity_worker, tasks1), total=len(tasks1)))
             
-        # 确保 'is_latent' 列存在
-        if 'is_latent' not in df.columns:
-            print("错误: 'is_latent' 列不存在。请先运行 mark_latent_period 方法。")
-            df['is_latent_fall'] = False
-            return df
+            print("计算 '下跌模式' vs '所有上升模式' 的DTW...")
+            results2 = list(tqdm(pool.imap(_similarity_worker, tasks2), total=len(tasks2)))
 
-        # 定义未来窗口和跌幅阈值
-        future_window = 10
-        fall_threshold = 0.95  # 对应 5% 的跌幅
+            print("计算 '上升模式' vs '其他上升模式' 的DTW (内部相似度)...")
+            results3 = list(tqdm(pool.imap(_similarity_worker, tasks3), total=len(tasks3)))
 
-        # 初始化结果列
-        df['is_latent_fall'] = False
+            print("计算 '下跌模式' vs '其他下跌模式' 的DTW (内部相似度)...")
+            results4 = list(tqdm(pool.imap(_similarity_worker, tasks4), total=len(tasks4)))
 
-        # 找到所有潜伏期的索引
-        latent_indices = df.index[df['is_latent']].tolist()
+        # 5. 汇总和分析结果 (与之前相同)
+        df1 = pd.DataFrame([r for r in results1 if r])
+        df2 = pd.DataFrame([r for r in results2 if r])
+        df3 = pd.DataFrame([r for r in results3 if r])
+        df4 = pd.DataFrame([r for r in results4 if r])
 
-        if not latent_indices:
-            print("未找到任何潜伏期模式，无法标记下跌。")
-            return df
-
-        # 对每个股票分组进行操作
-        tqdm.pandas(desc="Marking latent fall")
+        print("\n--- 相似性评估结果 ---")
+        if not df3.empty:
+            print(f"上升模式内部平均DTW距离 (相似度): {df3['mean_dtw'].mean():.4f}")
+        if not df4.empty:
+            print(f"下跌模式内部平均DTW距离 (相似度): {df4['mean_dtw'].mean():.4f}")
+        if not df1.empty:
+            print(f"上升模式与下跌模式的平均DTW距离 (差异度): {df1['mean_dtw'].mean():.4f}")
+        if not df2.empty:
+            print(f"下跌模式与上升模式的平均DTW距离 (差异度): {df2['mean_dtw'].mean():.4f}")
         
-        def mark_fall_for_group(group):
-            group_latent_indices = group.index.intersection(latent_indices)
-            if group_latent_indices.empty:
-                return group
+        print("\n结论:")
+        if not df1.empty and not df3.empty and not df1.empty and not df4.empty:
+            rise_intra_dist = df3['mean_dtw'].mean()
+            rise_inter_dist = df1['mean_dtw'].mean()
+            fall_intra_dist = df4['mean_dtw'].mean()
+            fall_inter_dist = df2['mean_dtw'].mean()
 
-            pct_chg_ratio = 1 + group['pctChg'] / 100
-                
-            for idx in group_latent_indices:
-                loc = group.index.get_loc(idx)
-                
-                if loc + 1 + future_window <= len(group):
-                    future_returns = pct_chg_ratio.iloc[loc + 1 : loc + 1 + future_window]
-                    cumulative_product = future_returns.prod()
-                    
-                if cumulative_product <= fall_threshold:
-                    group.loc[idx, 'is_latent_fall'] = True
-            return group
-
-        df = df.groupby('code', group_keys=False).progress_apply(mark_fall_for_group)
+            if rise_inter_dist > rise_intra_dist:
+                print(f" - 上升模式与自身的相似度({rise_intra_dist:.4f}) 高于 与下跌模式的相似度({rise_inter_dist:.4f})。模式有显著差异。")
+            else:
+                print(f" - 上升模式与自身的相似度({rise_intra_dist:.4f}) 低于或等于 与下跌模式的相似度({rise_inter_dist:.4f})。模式形态相似。")
             
-        print(f"潜伏后下跌模式标记完成。共标记 {df['is_latent_fall'].sum()} 个。")
-        return df
+            if fall_inter_dist > fall_intra_dist:
+                print(f" - 下跌模式与自身的相似度({fall_intra_dist:.4f}) 高于 与上涨模式的相似度({fall_inter_dist:.4f})。模式有显著差异。")
+            else:
+                print(f" - 下跌模式与自身的相似度({fall_intra_dist:.4f}) 低于或等于 与上涨模式的相似度({fall_inter_dist:.4f})。模式形态相似。")
+
+        return {"rise_vs_fall": df1, "fall_vs_rise": df2, "rise_vs_rise": df3, "fall_vs_fall": df4}
     
     def main(self):
         self.add_pct_chg()
@@ -759,7 +758,19 @@ if __name__ == "__main__":
     from prepare import get_stock_merge_table
     df = get_stock_merge_table(220)
     pattern_matcher = PatternMatch(df, window=30)
-    dtw_stats = pattern_matcher.main()
+    # dtw_stats = pattern_matcher.main() # 注释掉原来的main调用
+
+    # --- 新增：调用相似性评估方法 ---
+    similarity_results = pattern_matcher.evaluate_rise_fall_similarity()
+
+    # 你可以在这里添加代码来处理或保存 similarity_results
+    if similarity_results:
+        print("\n--- 保存相似性评估结果 ---")
+        for name, result_df in similarity_results.items():
+            if not result_df.empty:
+                file_path = f"{name}_similarity_results.csv"
+                result_df.to_csv(file_path, index=False)
+                print(f"结果已保存到 {file_path}")
 
     # 从文件加载DTW统计结果并进行分析
     # print("\n--- 从文件加载并分析DTW统计结果 ---")
