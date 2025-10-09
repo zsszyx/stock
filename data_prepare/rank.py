@@ -106,43 +106,54 @@ class CurvatureFilter(BaseFilter):
         df = df.groupby('code').apply(compute_curvature, col='close').reset_index(drop=True)
         period = 10
         df = df.groupby('code').apply(compute_curvature, col='volume').reset_index(drop=True)
+        def check_recent_curvature(group):
+            # 检查最近3天的volume和close曲率是否都大于等于0
+            group['recent_curvature_positive'] = (
+            (group['curvature_close'].rolling(window=3, min_periods=3).min() >= 0) &
+            (group['curvature_volume'].rolling(window=3, min_periods=3).min() >= 0)
+            )
+            return group
+        
+        df = df.groupby('code').apply(check_recent_curvature).reset_index(drop=True)
         self.df = df
 
     def apply_filter(self, date) -> pd.DataFrame:
         df_today = self.df[self.df['date'] == date].copy()
         # 过滤掉60日均线曲率大于0的股票
-        curvature_stocks = df_today[(df_today[f'curvature_close'] >= 0) & (df_today[f'curvature_volume'] >= 0)]
+        curvature_stocks = df_today[(df_today[f'recent_curvature_positive'])]
         return curvature_stocks['code']
     
 if __name__ == "__main__":
     from prepare import get_stock_merge_table
+    date = '2025-09-30'
     df = get_stock_merge_table(220)
     filter = BollingFilter(df)
-    codes = filter.apply_filter('2025-09-26')
+    codes = filter.apply_filter(date)
     print(codes.info())
 
     limit_up_filter = LimitFilter(df)
-    limit_up_codes = limit_up_filter.apply_filter('2025-09-26')
+    limit_up_codes = limit_up_filter.apply_filter(date)
     print(limit_up_codes.info())
     high_close_filter = HighCloseFilter(df)
-    high_close_codes = high_close_filter.apply_filter('2025-09-26')
+    
+    high_close_codes = high_close_filter.apply_filter(date)
     print(high_close_codes.info())
 
     latest_chg_filter = LatestChgFilter(df)
-    latest_chg_codes = latest_chg_filter.apply_filter('2025-09-26')
+    latest_chg_codes = latest_chg_filter.apply_filter(date)
     print(latest_chg_codes.info())
 
     curvature_filter = CurvatureFilter(df)
-    curvature_codes = curvature_filter.apply_filter('2025-09-26')
+    curvature_codes = curvature_filter.apply_filter(date)
     print(curvature_codes.info())
 
 
     # 求交集
     final_codes = set(codes) & set(limit_up_codes) & set(high_close_codes) & set(latest_chg_codes) & set(curvature_codes)
-    # print(final_codes)
+    print(final_codes)
     print(f"最终筛选出 {len(final_codes)} 只股票")
     # 随机选择10只股票
-    import random
-    sample_size = min(5, len(final_codes))
-    random_codes = random.sample(list(final_codes), sample_size)
-    print(random_codes)
+    # import random
+    # sample_size = min(5, len(final_codes))
+    # random_codes = random.sample(list(final_codes), sample_size)
+    # print(random_codes)
