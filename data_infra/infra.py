@@ -226,7 +226,7 @@ def update_stock_kline(conn, cursor, freq='daily', codes=None, force_update=Fals
     # 获取最新的交易日作为today
     trade_dates = fetch_trade_dates()
 
-    today = trade_dates.iloc[-2]
+    today = trade_dates.iloc[-1]
     logger.info(f"最新交易日: {today}")
 
     # 获取数据库中已有的表信息
