@@ -97,7 +97,7 @@ class CurvatureFilter(BaseFilter):
     def add_curvature(self):
         df = self.df
         # 60日均线曲率
-        period = self.period
+        period = 20
         def compute_curvature(group, col='close'):
             # 计算60日均线的二阶导数作为曲率指标
             group['ma'] = group[col].rolling(window=period, min_periods=period).mean()
@@ -122,22 +122,71 @@ class CurvatureFilter(BaseFilter):
         # 过滤掉60日均线曲率大于0的股票
         curvature_stocks = df_today[(df_today[f'recent_curvature_positive'])]
         return curvature_stocks['code']
+
+class UpShadowFilter(BaseFilter):
+    def __init__(self, df):
+        super().__init__(df)
+        # 计算最近三天上影线比例是否超过close的3%
+        self.df['up_shadow'] = (self.df['high']) / self.df['close']
+        self.df['up_shadow'] = self.df['up_shadow'].groupby(self.df['code']).rolling(window=3).max().reset_index(level=0, drop=True)
+
+    def apply_filter(self, date) -> pd.DataFrame:
+        df_today = self.df[self.df['date'] == date].copy()
+        up_shadow_stocks = df_today[df_today['up_shadow'] <= 1.02]
+        return up_shadow_stocks['code']
+
+class ColunmnsAdder:
+    def __init__(self, df):
+        self.df = df
+
+    def compute_mean_curvature(self, group, period, col='close'):
+        # 计算60日均线的二阶导数作为曲率指标
+        ma = group[col].rolling(window=period, min_periods=period).mean()
+        group[f'curvature_{col}_{period}'] = ma.diff().diff()
+        return group
+
+    def compute_mean_diff(self, group, period, col='close'):
+        # 计算60日均线的变化率作为指标
+        ma = group[col].rolling(window=period, min_periods=period).mean()
+        group[f'mean_diff_{col}_{period}'] = ma.diff()
+        return group
+
+    def up_shadow(self, group):
+        group['up_shadow'] = (group['high']) / group['close']
+        group['up_shadow'] = group['up_shadow'].rolling(window=3).max()
+        return group
+    
+    def add_columns(self):
+        df = self.df
+        df = df.groupby('code').apply(self.compute_curvature, period=60, col='close').reset_index(drop=True)
+        df = df.groupby('code').apply(self.compute_curvature, period=20, col='close').reset_index(drop=True)
+        df = df.groupby('code').apply(self.compute_curvature, period=10, col='volume').reset_index(drop=True)
+        df = df.groupby('code').apply(self.up_shadow).reset_index(drop=True)
+        df = df.groupby('code').apply(self.compute_mean_diff, period=20, col='close').reset_index(drop=True)
+        df = df.groupby('code').apply(self.compute_mean_diff, period=60, col='close').reset_index(drop=True)
+        self.df = df
+        return df
+    
+    def filter_by_date(self, date):
+        df_today = self.df[self.df['date'] == date].copy()
+        
+        return df_today
     
 if __name__ == "__main__":
     from prepare import get_stock_merge_table
-    date = '2025-09-30'
+    date = '2025-10-09'
     df = get_stock_merge_table(220)
-    filter = BollingFilter(df)
-    codes = filter.apply_filter(date)
-    print(codes.info())
+    # filter = BollingFilter(df)
+    # codes = filter.apply_filter(date)
+    # print(codes.info())
 
     limit_up_filter = LimitFilter(df)
     limit_up_codes = limit_up_filter.apply_filter(date)
     print(limit_up_codes.info())
     high_close_filter = HighCloseFilter(df)
     
-    high_close_codes = high_close_filter.apply_filter(date)
-    print(high_close_codes.info())
+    # high_close_codes = high_close_filter.apply_filter(date)
+    # print(high_close_codes.info())
 
     latest_chg_filter = LatestChgFilter(df)
     latest_chg_codes = latest_chg_filter.apply_filter(date)
@@ -146,10 +195,13 @@ if __name__ == "__main__":
     curvature_filter = CurvatureFilter(df)
     curvature_codes = curvature_filter.apply_filter(date)
     print(curvature_codes.info())
-
+    
+    up_shadow_filter = UpShadowFilter(df)
+    up_shadow_codes = up_shadow_filter.apply_filter(date)
+    print(up_shadow_codes.info())
 
     # 求交集
-    final_codes = set(codes) & set(limit_up_codes) & set(high_close_codes) & set(latest_chg_codes) & set(curvature_codes)
+    final_codes = set(curvature_codes) & set(up_shadow_codes) & set(latest_chg_codes) & set(limit_up_codes)
     print(final_codes)
     print(f"最终筛选出 {len(final_codes)} 只股票")
     # 随机选择10只股票
