@@ -221,7 +221,8 @@ def get_stock_merge_industry_table(length=30, freq='daily'):
 
     # 合并数据
     merged = pd.merge(stock_df, industry_df, on='code', how='left')
-
+    merged = merged.sort_values(by=['code', 'date']).reset_index(drop=True)
+    merged = merged.set_index(['code', 'date'])
     return merged
 
 if __name__ == "__main__":
