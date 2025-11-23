@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 # 数据库路径
 DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'stock_data.db')
+print(DB_PATH)
 # DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'stock_data.db')
 
 def with_db_connection(func):
@@ -62,10 +63,12 @@ def get_industry_data(conn, cusor):
 
 def get_table_info_from_db(conn, cursor):
     """获取数据库中已存在的K线数据表信息"""  
-    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND (name LIKE 'daily_%' OR name LIKE 'minute60_%')")
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table'") 
+    # "AND (name LIKE 'daily_%' OR name LIKE 'minute5_%')")
     # cursor
     tables = cursor.fetchall()
     tables = [table[0] for table in tables]
+    print(tables)
     table_info = {}
     for table in tables:
         table_name = table
@@ -88,7 +91,7 @@ def get_table_info_from_db(conn, cursor):
             }
     if not table_info:
         logger.error("数据库中没有找到K线数据表")
-        return
+        raise ValueError("数据库中没有找到K线数据表")
     return table_info
 
 @with_db_connection
@@ -184,6 +187,8 @@ def get_stock_merge_table(length=30, freq='daily'):
         df = info['data']
         # 必须包含指定的关键列，便于扩展
         required_columns = ['market_value','date','open','high','low','close','volume','turn','amount','pctChg']
+        if freq == 'minute5':
+            required_columns = ['volume','amount']
         if not all(col in df.columns for col in required_columns):
             logger.warning(f"{code} 数据缺失关键列，已跳过")
             continue
@@ -227,7 +232,9 @@ def get_stock_merge_industry_table(length=30, freq='daily'):
 
 if __name__ == "__main__":
     # 测试获取合并表
-    df = get_stock_merge_industry_table(length=60, freq='daily')
+    # 保存为Excel文件，使用自动生成的文件名
+    df = get_stock_merge_industry_table(length=60, freq='minute5')
+  
     print(df.head())
     print(df.tail())
     print(df.info())
