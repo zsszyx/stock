@@ -89,7 +89,7 @@ DEFAULT_ADJUST_FLAG = {
 DEFAULT_DATA_LENGTH = 30
 
 # 首次/强制更新默认时间范围（两年）
-FIRST_UPDATE_DAYS = 365 * 2
+FIRST_UPDATE_DAYS = 365
 
 # 必要列配置（用于数据验证）
 REQUIRED_COLUMNS = {
@@ -97,9 +97,8 @@ REQUIRED_COLUMNS = {
     'minute5': ['volume', 'amount']
 }
 
-# 更新配置
-DEFAULT_FORCE_UPDATE = True  # 是否强制更新（无视上次更新时间）
-DEFAULT_FORCE_RECREATE = True  # 是否强制重建表结构
+# 更新配置 # 是否强制更新（无视上次更新时间）
+DEFAULT_FORCE_UPDATE = DEFAULT_FORCE_RECREATE = True  # 是否强制重建表结构
 
 # 初始化日志
 logging.basicConfig(level=LOG_LEVEL, format=LOG_FORMAT)
@@ -286,7 +285,6 @@ def ensure_table_exists(conn, cursor, table_name, create_sql, force_recreate=Non
         cursor.execute(f"DROP TABLE IF EXISTS {table_name}")
         cursor.execute(create_sql)
         conn.commit()
-        logger.info(f"表 {table_name} 已重新创建")
         return True
     
     # 检查是否需要创建新表
@@ -346,22 +344,20 @@ def update_industry(conn, cursor, today):
     return rs
 
 # ================= 数据更新核心函数 =================
-def update_single_stock_data(conn, cursor, code, name, freq, today, force_update=None, force_recreate=None):
-    """更新单个股票的数据到大表中"""
+def update_single_stock_data(conn, cursor, code, name, freq, today, force_update=None):
+    """更新单个股票的数据到大表中
+    
+    注意：表结构相关操作已移至update_stock_kline函数中全局处理
+    """
     # 使用全局配置或传入的参数
     force_update = DEFAULT_FORCE_UPDATE if force_update is None else force_update
-    force_recreate = DEFAULT_FORCE_RECREATE if force_recreate is None else force_recreate
     # 验证频率参数
     if freq not in TABLE_NAMES:
         raise ValueError(f"不支持的频率: {freq}")
     
     # 从全局配置获取表名和创建SQL
     table_name = TABLE_NAMES[freq]
-    create_sql = CREATE_SQL_STATEMENTS[freq]
     fetch_func = fetch_daily_kline if freq == 'daily' else fetch_minute5_kline
-    
-    # 确保表存在
-    ensure_table_exists(conn, cursor, table_name, create_sql, force_recreate=force_recreate)
     
     # 获取该股票的最后更新日期
     last_update_date = get_stock_last_update_date(conn, cursor, table_name, code)
@@ -370,11 +366,14 @@ def update_single_stock_data(conn, cursor, code, name, freq, today, force_update
     if force_update or last_update_date is None:
         # 强制更新或首次更新，使用全局配置的天数
         start_date = (datetime.datetime.now() - datetime.timedelta(days=FIRST_UPDATE_DAYS)).strftime('%Y-%m-%d')
-        logger.info(f"[{code}] 首次更新或强制更新，获取 {start_date} 至 {today} 的数据")
+        logging.info(f"[{code}] 首次更新或强制更新，获取 {start_date} 至 {today} 的数据")
     else:
         # 增量更新，从上一次更新日期的下一天开始
-        start_date = last_update_date
-        logger.info(f"[{code}] 增量更新，获取 {start_date} 至 {today} 的数据")
+        # 将last_update_date转换为datetime对象并加一天
+        last_date_obj = datetime.datetime.strptime(last_update_date, '%Y-%m-%d')
+        next_day_obj = last_date_obj + datetime.timedelta(days=1)
+        start_date = next_day_obj.strftime('%Y-%m-%d')
+        logging.info(f"[{code}] 增量更新，获取 {start_date} 至 {today} 的数据")
     
     # 获取数据
     df = fetch_func(code, start_date=start_date, end_date=today)
@@ -394,42 +393,40 @@ def update_single_stock_data(conn, cursor, code, name, freq, today, force_update
     else:
         df = df.drop_duplicates(subset=['code', 'date'], keep='last')
     if len(df) < initial_len:
-        logger.warning(f"[{code}] 发现 {initial_len - len(df)} 条重复数据，已去重")
+        logging.warning(f"[{code}] 发现 {initial_len - len(df)} 条重复数据，已去重")
     
-    # 对于增量更新，先删除已有的相同日期的数据
-    if not force_update and last_update_date is not None and len(df) > 0:
-        # 删除从last_update_date开始的所有数据
-        # 对于分钟线表，虽然主键已变更为(code, time)，但我们仍基于date进行增量更新
-        delete_query = f"DELETE FROM {table_name} WHERE code = ? AND date >= ?"
-        cursor.execute(delete_query, (code, last_update_date))
-        conn.commit()  # 确保删除操作立即生效
-        logger.info(f"[{code}] 已删除 {last_update_date} 之后的旧数据，为增量更新做准备")
+    # 对于增量更新，先删除已有的相应日期的数据
+    # if not force_update and last_update_date is not None and len(df) > 0:
+    #     # 删除从start_date开始的所有数据（现在是last_update_date的下一天）
+    #     # 对于分钟线表，虽然主键已变更为(code, time)，但我们仍基于date进行增量更新
+    #     delete_query = f"DELETE FROM {table_name} WHERE code = ? AND date >= ?"
+    #     cursor.execute(delete_query, (code, start_date))
+    #     conn.commit()  # 确保删除操作立即生效
+    #     logging.info(f"[{code}] 已删除 {start_date} 之后的旧数据，为增量更新做准备")
     
     # 插入数据
     try:
-        # 使用单独的插入语句，而不是批量插入，以便更好地处理错误
-        success_count = 0
-        for _, row in df.iterrows():
-            try:
-                # 构建INSERT OR REPLACE语句
-                columns_str = ','.join(row.index)
-                placeholders = ','.join(['?'] * len(row))
-                sql = f"INSERT OR REPLACE INTO {table_name} ({columns_str}) VALUES ({placeholders})"
-                
-                # 执行单条插入
-                cursor.execute(sql, tuple(row))
-                success_count += 1
-            except Exception as row_e:
-                # 记录单行错误，但继续处理其他行
-                logger.warning(f"[{code}] 插入单行数据失败: {str(row_e)}")
-        
-        # 提交所有成功的插入
-        conn.commit()
-        logger.info(f"[{code}] 成功插入/更新 {success_count}/{len(df)} 条数据到 {table_name}")
-        return success_count > 0  # 只要有一条成功就返回True
+        if len(df) > 0:
+            # 构建INSERT OR REPLACE语句
+            columns_str = ','.join(df.columns)
+            placeholders = ','.join(['?'] * len(df.columns))
+            sql = f"INSERT OR REPLACE INTO {table_name} ({columns_str}) VALUES ({placeholders})"
+            
+            # 准备数据元组列表
+            data_tuples = [tuple(row) for _, row in df.iterrows()]
+            
+            # 执行批量插入
+            cursor.executemany(sql, data_tuples)
+            conn.commit()
+            
+            logging.info(f"[{code}] 成功批量插入/更新 {len(df)} 条数据到 {table_name}")
+            return True
+        else:
+            logging.info(f"[{code}] 没有新数据需要插入")
+            return True
     except Exception as e:
         conn.rollback()  # 发生错误时回滚事务
-        logger.error(f"[{code}] 数据处理失败: {str(e)}")
+        logging.error(f"[{code}] 数据处理失败: {str(e)}")
         return False
 
 @with_db_connection
@@ -449,10 +446,27 @@ def update_stock_kline(conn, cursor, freq='daily', codes=None, force_update=None
     force_recreate = DEFAULT_FORCE_RECREATE if force_recreate is None else force_recreate
     assert freq in ['daily', 'minute5'], "频率参数 freq 必须是 'daily' 或 'minute5'"
     
+    # 从全局配置获取表名和创建SQL
+    table_name = TABLE_NAMES[freq]
+    create_sql = CREATE_SQL_STATEMENTS[freq]
+    
+    # 全局层面执行表检查和重建操作（每个更新批次只执行一次）
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table_name,))
+    table_exists = cursor.fetchone() is not None
+    
+    if not table_exists:
+        # 表不存在时创建表
+        ensure_table_exists(conn, cursor, table_name, create_sql, force_recreate=False)
+        logging.info(f"全局: 表 {table_name} 不存在，已创建")
+    elif force_recreate:
+        # 表存在且用户要求重建时才重建（全局只重建一次）
+        ensure_table_exists(conn, cursor, table_name, create_sql, force_recreate=True)
+        logging.info(f"全局: 表 {table_name} 已强制重建")
+    
     # 获取最新的交易日作为today
     trade_dates = fetch_trade_dates()
-    today = trade_dates.iloc[-1]
-    logger.info(f"最新交易日: {today}")
+    today = trade_dates.iloc[-2]
+    logging.info(f"最新交易日: {today}")
     
     # 获取股票列表
     all_codes, all_names, index_codes, index_names = fetch_stock_list(end_date=today)
@@ -486,7 +500,8 @@ def update_stock_kline(conn, cursor, freq='daily', codes=None, force_update=None
     fail_count = 0
     
     for i, (code, name) in enumerate(zip(codes, names)):
-        logger.info(f"[{i+1}/{total_stocks}] 处理股票: {code} - {name}")
+        logging.info(f"[{i+1}/{total_stocks}] 处理股票: {code} - {name}")
+        # 更新单个股票数据
         if update_single_stock_data(conn, cursor, code, name, freq, today, force_update):
             success_count += 1
         else:
@@ -590,7 +605,7 @@ def get_stock_merge_table(length=None, freq='daily'):
         required_columns = REQUIRED_COLUMNS[freq]
         
         # 检查必要列
-        if freq == 'daily' and not all(col in df.columns for col in required_columns):
+        if not all(col in df.columns for col in required_columns):
             logger.warning(f"{code} 数据缺失关键列，已跳过")
             continue
             
