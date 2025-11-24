@@ -667,6 +667,6 @@ if __name__ == "__main__":
     
     # 获取合并表数据（使用全局配置的默认长度）
     df = get_stock_merge_industry_table(freq='minute5')
-    df.to_excel('stock_data.csv')
+    df.to_csv('stock_data.csv')
     print(df.head(1000))
     print(df.info())
