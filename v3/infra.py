@@ -86,7 +86,7 @@ DEFAULT_ADJUST_FLAG = {
 }
 
 # 数据查询默认配置
-DEFAULT_DATA_LENGTH = 30
+DEFAULT_DATA_LENGTH = 960
 
 # 首次/强制更新默认时间范围（两年）
 FIRST_UPDATE_DAYS = 365
@@ -98,7 +98,7 @@ REQUIRED_COLUMNS = {
 }
 
 # 更新配置 # 是否强制更新（无视上次更新时间）
-DEFAULT_FORCE_UPDATE = DEFAULT_FORCE_RECREATE = True  # 是否强制重建表结构
+DEFAULT_FORCE_UPDATE = DEFAULT_FORCE_RECREATE = False  # 是否强制重建表结构
 
 # 初始化日志
 logging.basicConfig(level=LOG_LEVEL, format=LOG_FORMAT)
@@ -663,9 +663,10 @@ if __name__ == "__main__":
     # update_stock_kline(freq='minute5')  # 现在会使用修改后的全局配置
     # 
     # 或者直接在调用时传入参数（会覆盖全局配置）
-    update_stock_kline(freq='minute5', force_update=True, force_recreate=True)
+    # update_stock_kline(freq='minute5')
     
     # 获取合并表数据（使用全局配置的默认长度）
-    df = get_stock_merge_industry_table(freq='daily')
-    print(df.head())
+    df = get_stock_merge_industry_table(freq='minute5')
+    df.to_excel('stock_data.csv')
+    print(df.head(1000))
     print(df.info())
