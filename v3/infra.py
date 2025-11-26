@@ -465,7 +465,7 @@ def update_stock_kline(conn, cursor, freq='daily', codes=None, force_update=None
     
     # 获取最新的交易日作为today
     trade_dates = fetch_trade_dates()
-    today = trade_dates.iloc[-2]
+    today = trade_dates.iloc[-1]
     logging.info(f"最新交易日: {today}")
     
     # 获取股票列表
@@ -663,7 +663,7 @@ if __name__ == "__main__":
     # update_stock_kline(freq='minute5')  # 现在会使用修改后的全局配置
     # 
     # 或者直接在调用时传入参数（会覆盖全局配置）
-    # update_stock_kline(freq='minute5')
+    update_stock_kline(freq='minute5')
     
     # 获取合并表数据（使用全局配置的默认长度）
     df = get_stock_merge_industry_table(freq='minute5')
