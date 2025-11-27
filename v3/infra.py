@@ -101,7 +101,7 @@ logger = logging.getLogger(__name__)
 print(f"数据库路径: {DB_PATH}")
 
 # =============== 数据库链接装饰器 =================
-def with_db_connection(func):
+def _with_db_connection(func):
     """数据库连接的装饰器，自动处理连接的创建、提交和关闭"""
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
@@ -117,7 +117,7 @@ def with_db_connection(func):
     return wrapper
 
 # ================= BaoStock 登录语法糖 =================
-def bs_login_required(func):
+def _bs_login_required(func):
     """BaoStock 登录装饰器，确保函数执行时已登录 BaoStock"""
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
@@ -132,7 +132,7 @@ def bs_login_required(func):
     return wrapper
 
 # ================= 交易日数据 =================
-def fetch_trade_dates(start_date=None, end_date=None):
+def _fetch_trade_dates(start_date=None, end_date=None):
     """获取交易日数据"""
     logger.info(f"获取交易日数据: {start_date} 至 {end_date}")
     rs = bs.query_trade_dates(start_date=start_date, end_date=end_date)
@@ -145,7 +145,7 @@ def fetch_trade_dates(start_date=None, end_date=None):
     return df['calendar_date']
 
 # ================= 股票基本信息 =================
-def fetch_stock_list(start_date=None, end_date=None):
+def _fetch_stock_list(start_date=None, end_date=None):
     """获取股票列表"""
     logger.info(f"获取 {end_date} 的股票列表")
     rs = bs.query_all_stock(end_date)
@@ -161,7 +161,7 @@ def fetch_stock_list(start_date=None, end_date=None):
     return df['code'], df['code_name'], index_df['code'], index_df['code_name']
 
 # ================= K线数据获取 =================
-def fetch_daily_kline(code, start_date=None, end_date=None, adjustflag=None):
+def _fetch_daily_kline(code, start_date=None, end_date=None, adjustflag=None):
     """获取股票日K线前复权数据
     
     参数:
@@ -214,7 +214,7 @@ def fetch_daily_kline(code, start_date=None, end_date=None, adjustflag=None):
     logger.info(f"获取到 {len(df)} 条K线数据")
     return df
 
-def fetch_minute5_kline(code, start_date=None, end_date=None, adjustflag=None):
+def _fetch_minute5_kline(code, start_date=None, end_date=None, adjustflag=None):
     """获取股票5分钟K线数据
 
     参数:
@@ -264,7 +264,7 @@ def fetch_minute5_kline(code, start_date=None, end_date=None, adjustflag=None):
     return df
 
 # ================= 数据库操作相关 =================
-def ensure_table_exists(conn, cursor, table_name, create_sql, force_recreate=None):
+def _ensure_table_exists(conn, cursor, table_name, create_sql, force_recreate=None):
     """确保数据表存在，不存在则创建
     
     参数:
@@ -290,7 +290,7 @@ def ensure_table_exists(conn, cursor, table_name, create_sql, force_recreate=Non
     
     return True
 
-def get_stock_last_update_date(conn, cursor, table_name, code):
+def _get_stock_last_update_date(conn, cursor, table_name, code):
     """获取指定股票在指定表中的最后更新日期"""
     try:
         # 先检查表是否存在
@@ -299,7 +299,7 @@ def get_stock_last_update_date(conn, cursor, table_name, code):
         
         if not table_exists:
              logging.info(f"表 {table_name} 不存在，返回None")
-             return None
+             raise ValueError(f"表 {table_name} 不存在")
         
         # 检查表是否是分钟线表，如果是则同时考虑date和time列
         if table_name == TABLE_NAMES['minute5']:
@@ -317,8 +317,8 @@ def get_stock_last_update_date(conn, cursor, table_name, code):
          logging.error(f"获取股票 {code} 的最后更新日期时出错: {e}")
          return None
 
-@with_db_connection
-def get_industry_data(conn, cursor):
+@_with_db_connection
+def _get_industry_data(conn, cursor):
     """获取股票行业分类数据"""
     sql = "SELECT * FROM stock_industry"
     df = pd.read_sql(sql, conn)
@@ -328,7 +328,7 @@ def get_industry_data(conn, cursor):
     df['code'] = df['code'].str.replace('sz.', 'sz')
     return df[['code', 'industry']]
 
-def update_industry(conn, cursor, today):
+def _update_industry(conn, cursor, today):
     """获取股票行业分类数据"""
     rs = bs.query_stock_industry(date=today)
     rs = rs.get_data()
@@ -338,7 +338,7 @@ def update_industry(conn, cursor, today):
     return rs
 
 # ================= 数据更新核心函数 =================
-def update_single_stock_data(conn, cursor, code, name, freq, today, force_update=None):
+def _update_single_stock_data(conn, cursor, code, name, freq, today, force_update=None):
     """更新单个股票的数据到大表中
     
     注意：表结构相关操作已移至update_stock_kline函数中全局处理
@@ -351,10 +351,10 @@ def update_single_stock_data(conn, cursor, code, name, freq, today, force_update
     
     # 从全局配置获取表名和创建SQL
     table_name = TABLE_NAMES[freq]
-    fetch_func = fetch_daily_kline if freq == 'daily' else fetch_minute5_kline
+    fetch_func = _fetch_daily_kline if freq == 'daily' else _fetch_minute5_kline
     
     # 获取该股票的最后更新日期
-    last_update_date = get_stock_last_update_date(conn, cursor, table_name, code)
+    last_update_date = _get_stock_last_update_date(conn, cursor, table_name, code)
     
     # 确定要获取的数据范围
     if force_update or last_update_date is None:
@@ -423,8 +423,8 @@ def update_single_stock_data(conn, cursor, code, name, freq, today, force_update
         logging.error(f"[{code}] 数据处理失败: {str(e)}")
         return False
 
-@with_db_connection
-@bs_login_required
+@_with_db_connection
+@_bs_login_required
 def update_stock_kline(conn, cursor, freq='daily'):
     """更新股票K线数据到大表中，支持个股增量更新
 
@@ -450,20 +450,20 @@ def update_stock_kline(conn, cursor, freq='daily'):
     
     if not table_exists:
         # 表不存在时创建表
-        ensure_table_exists(conn, cursor, table_name, create_sql, force_recreate=False)
+        _ensure_table_exists(conn, cursor, table_name, create_sql, force_recreate=False)
         logging.info(f"全局: 表 {table_name} 不存在，已创建")
     elif force_recreate:
         # 表存在且用户要求重建时才重建（全局只重建一次）
-        ensure_table_exists(conn, cursor, table_name, create_sql, force_recreate=True)
+        _ensure_table_exists(conn, cursor, table_name, create_sql, force_recreate=True)
         logging.info(f"全局: 表 {table_name} 已强制重建")
     
     # 获取最新的交易日作为today
-    trade_dates = fetch_trade_dates()
+    trade_dates = _fetch_trade_dates()
     today = trade_dates.iloc[LATEST_DAY]
     logging.info(f"最新交易日: {today}")
     
     # 获取股票列表
-    all_codes, all_names, index_codes, index_names = fetch_stock_list(end_date=today)
+    all_codes, all_names, index_codes, index_names = _fetch_stock_list(end_date=today)
     
     codes, names = all_codes, all_names
     
@@ -476,7 +476,7 @@ def update_stock_kline(conn, cursor, freq='daily'):
     for i, (code, name) in enumerate(zip(codes, names)):
         logging.info(f"[{i+1}/{total_stocks}] 处理股票: {code} - {name}")
         # 更新单个股票数据
-        if update_single_stock_data(conn, cursor, code, name, freq, today, force_update):
+        if _update_single_stock_data(conn, cursor, code, name, freq, today, force_update):
             success_count += 1
         else:
             fail_count += 1
@@ -484,7 +484,7 @@ def update_stock_kline(conn, cursor, freq='daily'):
     logger.info(f"K线数据更新完成: 成功 {success_count}, 失败 {fail_count}")
 
 # ================= 数据查询函数 =================
-@with_db_connection
+@_with_db_connection
 def get_stock_merge_table(conn, cursor, length=None, freq='daily', start_date=None, end_date=None):
     """
     获取所有股票的最新数据，拼接为一个大表
@@ -519,24 +519,7 @@ def get_stock_merge_table(conn, cursor, length=None, freq='daily', start_date=No
     return merged
 
 if __name__ == "__main__":
-    # 示例用法 - 使用全局配置
-    # 更新日线数据
-    # update_stock_kline(freq='daily')  # 使用默认配置（无需强制更新和重建）
-    
-    # 获取合并行业信息的股票数据（直接SQL查询，无需中转函数）
-    # 注意：现在函数已添加@with_db_connection装饰器，不需要手动传入连接参数
-    # stock_industry_df = get_stock_merge_industry_table(length=30, freq='daily')
-    
-    # 如果需要临时修改默认行为，可以直接修改全局配置
-    # 然后调用函数时不传入相关参数
-    # 例如：
-    # global DEFAULT_FORCE_UPDATE, DEFAULT_FORCE_RECREATE
-    # DEFAULT_FORCE_UPDATE = True
-    # DEFAULT_FORCE_RECREATE = True
-    # update_stock_kline(freq='minute5')  # 现在会使用修改后的全局配置
-    # 
-    # 或者直接在调用时传入参数（会覆盖全局配置）
-    # update_stock_kline(freq='minute5', latest_day=-2)
+    # update_stock_kline(freq='minute5')
     
     # 获取合并表数据（使用全局配置的默认长度）
     df = get_stock_merge_table(freq='minute5', start_date='2025-11-12', end_date='2025-11-26')
