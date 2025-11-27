@@ -85,20 +85,14 @@ DEFAULT_ADJUST_FLAG = {
     'minute5': '3'
 }
 
-# 数据查询默认配置
-DEFAULT_DATA_LENGTH = 960
-
 # 首次/强制更新默认时间范围（两年）
 FIRST_UPDATE_DAYS = 365
 
-# 必要列配置（用于数据验证）
-REQUIRED_COLUMNS = {
-    'daily': ['market_value', 'date', 'open', 'high', 'low', 'close', 'volume', 'turn', 'amount', 'pctChg'],
-    'minute5': ['volume', 'amount']
-}
-
 # 更新配置 # 是否强制更新（无视上次更新时间）
 DEFAULT_FORCE_UPDATE = DEFAULT_FORCE_RECREATE = False  # 是否强制重建表结构
+
+# 更新到最近哪一天
+LATEST_DAY = -1  # 默认更新到最近一天
 
 # 初始化日志
 logging.basicConfig(level=LOG_LEVEL, format=LOG_FORMAT)
@@ -431,7 +425,7 @@ def update_single_stock_data(conn, cursor, code, name, freq, today, force_update
 
 @with_db_connection
 @bs_login_required
-def update_stock_kline(conn, cursor, freq='daily', codes=None, force_update=None, force_recreate=None, max_stocks=None, latest_day=-1):
+def update_stock_kline(conn, cursor, freq='daily'):
     """更新股票K线数据到大表中，支持个股增量更新
 
     参数:
@@ -442,8 +436,8 @@ def update_stock_kline(conn, cursor, freq='daily', codes=None, force_update=None
         max_stocks: 最大更新股票数量，用于测试
     """
     # 使用全局配置或传入的参数
-    force_update = DEFAULT_FORCE_UPDATE if force_update is None else force_update
-    force_recreate = DEFAULT_FORCE_RECREATE if force_recreate is None else force_recreate
+    force_update = DEFAULT_FORCE_UPDATE 
+    force_recreate = DEFAULT_FORCE_RECREATE 
     assert freq in ['daily', 'minute5'], "频率参数 freq 必须是 'daily' 或 'minute5'"
     
     # 从全局配置获取表名和创建SQL
@@ -465,33 +459,13 @@ def update_stock_kline(conn, cursor, freq='daily', codes=None, force_update=None
     
     # 获取最新的交易日作为today
     trade_dates = fetch_trade_dates()
-    today = trade_dates.iloc[latest_day]
+    today = trade_dates.iloc[LATEST_DAY]
     logging.info(f"最新交易日: {today}")
     
     # 获取股票列表
     all_codes, all_names, index_codes, index_names = fetch_stock_list(end_date=today)
     
-    # 更新行业分类数据
-    update_industry(conn, cursor, today)
-    
-    # 如果指定了股票代码，则只更新这些股票
-    if codes is not None:
-        # 过滤出存在的股票
-        code_name_dict = dict(zip(all_codes, all_names))
-        filtered_codes = []
-        filtered_names = []
-        for code in codes:
-            if code in code_name_dict:
-                filtered_codes.append(code)
-                filtered_names.append(code_name_dict[code])
-        codes, names = filtered_codes, filtered_names
-    else:
-        codes, names = all_codes, all_names
-    
-    # 限制最大股票数量
-    if max_stocks is not None:
-        codes = codes[:max_stocks]
-        names = names[:max_stocks]
+    codes, names = all_codes, all_names
     
     total_stocks = len(codes)
     logger.info(f"开始更新 {total_stocks} 只股票的{freq}数据到大表中")
@@ -562,10 +536,10 @@ if __name__ == "__main__":
     # update_stock_kline(freq='minute5')  # 现在会使用修改后的全局配置
     # 
     # 或者直接在调用时传入参数（会覆盖全局配置）
-    update_stock_kline(freq='minute5', latest_day=-2)
+    # update_stock_kline(freq='minute5', latest_day=-2)
     
     # 获取合并表数据（使用全局配置的默认长度）
-    df = get_stock_merge_table(freq='minute5')
+    df = get_stock_merge_table(freq='minute5', start_date='2025-11-12', end_date='2025-11-26')
     df.to_csv('stock_data.csv')
     print(df.head(1000))
     print(df.info())
