@@ -431,7 +431,7 @@ def update_single_stock_data(conn, cursor, code, name, freq, today, force_update
 
 @with_db_connection
 @bs_login_required
-def update_stock_kline(conn, cursor, freq='daily', codes=None, force_update=None, force_recreate=None, max_stocks=None):
+def update_stock_kline(conn, cursor, freq='daily', codes=None, force_update=None, force_recreate=None, max_stocks=None, latest_day=-1):
     """更新股票K线数据到大表中，支持个股增量更新
 
     参数:
@@ -465,7 +465,7 @@ def update_stock_kline(conn, cursor, freq='daily', codes=None, force_update=None
     
     # 获取最新的交易日作为today
     trade_dates = fetch_trade_dates()
-    today = trade_dates.iloc[-1]
+    today = trade_dates.iloc[latest_day]
     logging.info(f"最新交易日: {today}")
     
     # 获取股票列表
@@ -624,7 +624,7 @@ if __name__ == "__main__":
     # update_stock_kline(freq='minute5')  # 现在会使用修改后的全局配置
     # 
     # 或者直接在调用时传入参数（会覆盖全局配置）
-    # update_stock_kline(freq='minute5')
+    update_stock_kline(freq='minute5', latest_day=-2)
     
     # 获取合并表数据（使用全局配置的默认长度）
     df = get_stock_merge_industry_table(freq='minute5')
