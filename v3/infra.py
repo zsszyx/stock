@@ -511,7 +511,7 @@ def update_stock_kline(conn, cursor, freq='daily', codes=None, force_update=None
 
 # ================= 数据查询函数 =================
 @with_db_connection
-def get_stock_merge_industry_table(conn, cursor, length=None, freq='daily'):
+def get_stock_merge_table(conn, cursor, length=None, freq='daily', start_date=None, end_date=None):
     """
     获取所有股票的最新数据，拼接为一个大表
     计算成交均价并按股票代码分组保留最近数据
@@ -525,80 +525,18 @@ def get_stock_merge_industry_table(conn, cursor, length=None, freq='daily'):
     # 从全局配置获取表名
     table_name = TABLE_NAMES[freq]
     
-    # 根据频率构建不同的查询逻辑
-    if freq == 'daily':
-        # 对于日线数据，查询最近20个交易日的日期
-        logging.info("对于日线数据，获取最近20个交易日的数据")
-        
-        # 使用SQL查询获取表中存在的唯一日期并排序，取最近20个
-        date_query = f"""
-        SELECT DISTINCT date FROM {table_name} 
-        ORDER BY date DESC 
-        LIMIT 20
-        """
-        
-        # 执行日期查询
-        trade_dates_df = pd.read_sql(date_query, conn)
-        
-        if len(trade_dates_df) == 0:
-            logging.warning("未找到交易数据")
-            return pd.DataFrame().set_index(['code', 'date'])
-        
-        # 获取最早的日期作为起始日期
-        start_date = trade_dates_df['date'].min()
-        logging.info(f"最近20个交易日的起始日期: {start_date}")
-        
-        # 构建数据查询 - 只获取从start_date开始的数据
-        query = f"""
+      
+    # 构建数据查询 - 只获取从start_date开始的数据
+    query = f"""
         SELECT * FROM {table_name}
-        WHERE date >= ?
+        WHERE date >= ? AND date <= ?
         ORDER BY code, date
         """
-        
-        # 执行查询
-        logging.info(f"开始读取所有股票从 {start_date} 至今的日线数据")
-        df = pd.read_sql(query, conn, params=[start_date])
-    else:  # 分钟线数据
-        # 对于分钟线数据，保留最近960条记录（相当于20天的数据）
-        keep_rows = 960
-        logging.info(f"对于分钟线数据，每组保留最近{keep_rows}条记录")
-        
-        # 构建SQL查询 - 使用窗口函数在数据库层面直接过滤数据
-        query = f"""
-        WITH ranked_stock_data AS (
-            SELECT 
-                *, 
-                ROW_NUMBER() OVER (PARTITION BY code ORDER BY date DESC, time DESC) as rn
-            FROM {table_name}
-        )
-        SELECT * FROM ranked_stock_data 
-        WHERE rn <= {keep_rows}
-        ORDER BY code, date, time
-        """
-        
-        # 执行查询
-        logging.info(f"开始直接读取所有股票的分钟线数据，并在SQL层面过滤只保留每组最近{keep_rows}条记录")
-        df = pd.read_sql(query, conn)
-        
-        # 删除rn列
-        if 'rn' in df.columns:
-            df = df.drop('rn', axis=1)
-    
-    # 从全局配置获取必要列进行验证
-    required_columns = REQUIRED_COLUMNS[freq]
-    
-    # 只检查必要列是否存在，不再进行长度检查
-    if not all(col in df.columns for col in required_columns):
-        missing_cols = [col for col in required_columns if col not in df.columns]
-        raise ValueError(f"数据缺失必要列: {missing_cols}")
-    
-    # 计算成交均价 (假设数据表中有price和volume列)
-    if 'price' in df.columns and 'volume' in df.columns:
-        logging.info("计算成交均价...")
-        df['avg_price'] = df['price'] * df['volume'] / df['volume'].replace(0, pd.NA)
-        df['avg_price'] = df['avg_price'].fillna(df['price'])
-    else:
-        logging.warning("price或volume列不存在，无法计算成交均价")
+    # 执行查询
+    logging.info(f"开始读取所有股票从 {start_date} 至 {end_date} 的日线数据")
+    df = pd.read_sql(query, conn, params=[start_date, end_date])
+                
+    df['price'] = df['amount'] / df['volume'].replace(0, pd.NA)
     
     # 设置索引
     merged = df.set_index(['code', 'date'])
@@ -627,7 +565,7 @@ if __name__ == "__main__":
     update_stock_kline(freq='minute5', latest_day=-2)
     
     # 获取合并表数据（使用全局配置的默认长度）
-    df = get_stock_merge_industry_table(freq='minute5')
+    df = get_stock_merge_table(freq='minute5')
     df.to_csv('stock_data.csv')
     print(df.head(1000))
     print(df.info())
