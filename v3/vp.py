@@ -1,5 +1,8 @@
 import pandas as pd
+import numpy as np
 from infra import get_stock_merge_table
+from plot import plot_volume_scatter
+from utils import calculate_value_area_and_poc
 
 def calculate_volume_profile(start_date, end_date, freq='minute5'):
     """
@@ -25,50 +28,20 @@ def calculate_volume_profile(start_date, end_date, freq='minute5'):
     # Calculate volume profile for each stock
     vp_table_list = []
     for code, stock_df in grouped_by_code:
-        # Group by price and sum the volume
-        volume_profile = stock_df.groupby('price')['volume'].sum().reset_index()
+        # Convert price to numeric, coercing errors to NaN
+        stock_df['price'] = pd.to_numeric(stock_df['price'], errors='coerce')
+        stock_df.dropna(subset=['price'], inplace=True)
+
+        # Round the price to 2 decimal places
+        stock_df['price'] = stock_df['price'].round(2)
+
+        # Group by date and price, then sum the volume
+        volume_profile = stock_df.groupby(['date', 'price'])['volume'].sum().reset_index()
         volume_profile = volume_profile.rename(columns={'volume': 'total_volume'})
         volume_profile['code'] = code
         vp_table_list.append(volume_profile)
 
     return vp_table_list
-
-def calculate_value_area_and_poc(vp_df):
-    """
-    Calculates the Point of Control (POC) and Value Area (VA) for a given volume profile.
-
-    Args:
-        vp_df (pd.DataFrame): A DataFrame with 'price' and 'total_volume' columns.
-
-    Returns:
-        tuple: A tuple containing POC, VA High, and VA Low.
-    """
-    if vp_df.empty:
-        return None, None, None
-
-    # Find the Point of Control (POC)
-    poc_index = vp_df['total_volume'].idxmax()
-    poc_price = vp_df.loc[poc_index, 'price']
-
-    total_volume = vp_df['total_volume'].sum()
-    target_volume = total_volume * 0.7
-
-    # Sort by volume to find the most significant price levels
-    vp_sorted_by_volume = vp_df.sort_values(by='total_volume', ascending=False).reset_index(drop=True)
-
-    # Accumulate volume until 70% is reached
-    cumulative_volume = 0
-    va_prices = []
-    for index, row in vp_sorted_by_volume.iterrows():
-        cumulative_volume += row['total_volume']
-        va_prices.append(row['price'])
-        if cumulative_volume >= target_volume:
-            break
-
-    va_high = max(va_prices)
-    va_low = min(va_prices)
-
-    return poc_price, va_high, va_low
 
 def find_hvn_lvn(vp_df, prominence=1.0):
     """
@@ -97,41 +70,78 @@ def find_hvn_lvn(vp_df, prominence=1.0):
 
     return hvns, lvns
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     start_date = '2025-11-12'
     end_date = '2025-11-26'
     
-    # Calculate the volume profiles
-    vptables = calculate_volume_profile(start_date=start_date, end_date=end_date)
+    vp_table_list = calculate_volume_profile(start_date, end_date)
     
-    # This dictionary will store basic attributes for each stock.
-    stock_attributes = {}
+    if not vp_table_list:
+        print("No volume profile data found.")
+    else:
+        all_vp_df = pd.concat(vp_table_list, ignore_index=True)
+        print(f"save all volume profile to volume_profiles.csv")
+        all_vp_df.to_csv("volume_profiles.csv", index=False, encoding='utf-8-sig')
 
-    # Print the volume profile for the first stock as an example
-    if vptables:
-        print("Volume profile for the first stock:")
-        print(vptables[0])
-        
-        # You can also concatenate all profiles into a single DataFrame
-        all_vps = pd.concat(vptables, ignore_index=True)
-        print("\nAll volume profiles combined:")
-        print(all_vps)
-        all_vps.to_csv('volume_profiles.csv', index=False)
-        print("\nSaved all volume profiles to volume_profiles.csv")
+        # Group by stock code
+        for code, group_df in all_vp_df.groupby('code'):
+            group_df['date'] = pd.to_datetime(group_df['date'])
+            unique_dates = sorted(group_df['date'].unique())
+            
+            # Ensure there are enough dates to split into 4 periods
+            if len(unique_dates) < 4:
+                continue
 
-        # Calculate and store VA and POC for each stock
-        for vp_df in vptables:
-            if not vp_df.empty:
-                code = vp_df['code'].iloc[0]
-                poc, va_high, va_low = calculate_value_area_and_poc(vp_df)
-                hvns, lvns = find_hvn_lvn(vp_df)
-                stock_attributes[code] = {
+            # Split dates into 4 periods
+            n_dates = len(unique_dates)
+            period_splits = np.array_split(unique_dates, 4)
+            
+            periods_data = []
+            valid_periods = True
+            for i, period_dates in enumerate(period_splits):
+                period_df = group_df[group_df['date'].isin(period_dates)]
+                
+                # Aggregate volume by price for the period
+                period_vp = period_df.groupby('price')['total_volume'].sum().reset_index()
+                period_vp.rename(columns={'total_volume': 'total_volume'}, inplace=True)
+
+                if period_vp.empty:
+                    valid_periods = False
+                    break
+
+                poc, va_high, va_low = calculate_value_area_and_poc(period_vp)
+                
+                if poc is None or va_high is None or va_low is None:
+                    valid_periods = False
+                    break
+                
+                # Calculate summed volume in VA range
+                va_volume = period_vp[(period_vp['price'] >= va_low) & (period_vp['price'] <= va_high)]['total_volume'].sum()
+                
+                periods_data.append({
+                    'poc': poc,
                     'va_high': va_high,
                     'va_low': va_low,
-                    'poc': poc,
-                    'hvns': hvns,
-                    'lvns': lvns
-                }
-        
-        print("\nStock Attributes (VA, POC, HVNs, and LVNs):")
-        print(stock_attributes)
+                    'va_volume': va_volume
+                })
+
+            if not valid_periods or len(periods_data) != 4:
+                continue
+
+            # New filtering logic
+            # Period 1: Largest VA volume
+            is_period1_ok = periods_data[0]['va_volume'] == max(p['va_volume'] for p in periods_data)
+
+            # Period 4: Smallest VA volume and POC is within Period 1's VA
+            is_period4_ok = (periods_data[3]['va_volume'] == min(p['va_volume'] for p in periods_data)) and \
+                            (periods_data[0]['va_low'] <= periods_data[3]['poc'] <= periods_data[0]['va_high'])
+
+            # Period 2: POC is the maximum
+            is_period2_ok = periods_data[1]['poc'] == max(p['poc'] for p in periods_data)
+
+            # Period 3: POC is the minimum
+            is_period3_ok = periods_data[2]['poc'] == min(p['poc'] for p in periods_data)
+
+            if is_period1_ok and is_period2_ok and is_period3_ok and is_period4_ok:
+                print(f"Stock {code} matches the criteria. Plotting...")
+                plot_volume_scatter(group_df, code, period_splits)

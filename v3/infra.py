@@ -519,7 +519,7 @@ def get_stock_merge_table(conn, cursor, length=None, freq='daily', start_date=No
     return merged
 
 if __name__ == "__main__":
-    # update_stock_kline(freq='minute5')
+    update_stock_kline(freq='minute5')
     
     # 获取合并表数据（使用全局配置的默认长度）
     df = get_stock_merge_table(freq='minute5', start_date='2025-11-12', end_date='2025-11-26')
