@@ -129,18 +129,14 @@ if __name__ == '__main__':
                 continue
 
             # New filtering logic
-            # Period 1: Largest VA volume
             is_period1_ok = periods_data[0]['va_volume'] == max(p['va_volume'] for p in periods_data)
 
-            # Period 4: Smallest VA volume and POC is within Period 1's VA
-            is_period4_ok = (periods_data[3]['va_volume'] == min(p['va_volume'] for p in periods_data)) and \
-                            (periods_data[0]['va_low'] <= periods_data[3]['poc'] <= periods_data[0]['va_high'])
+            is_period4_ok = (periods_data[3]['poc'] >= periods_data[2]['poc']) and (periods_data[3]['va_volume'] <= 0.5 * periods_data[0]['va_volume'])
 
-            # Period 2: POC is the maximum
             is_period2_ok = periods_data[1]['poc'] == max(p['poc'] for p in periods_data)
 
-            # Period 3: POC is the minimum
-            is_period3_ok = periods_data[2]['poc'] == min(p['poc'] for p in periods_data)
+            is_period3_ok = periods_data[2]['poc'] == min(p['poc'] for p in periods_data) and (periods_data[2]['va_volume'] == min(p['va_volume'] for p in periods_data)) 
+
 
             if is_period1_ok and is_period2_ok and is_period3_ok and is_period4_ok:
                 print(f"Stock {code} matches the criteria. Plotting...")
