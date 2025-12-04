@@ -72,7 +72,7 @@ def find_hvn_lvn(vp_df, prominence=1.0):
 
 if __name__ == '__main__':
     start_date = '2025-11-12'
-    end_date = '2025-12-03'
+    end_date = '2025-12-04'
     
     vp_table_list = calculate_volume_profile(start_date, end_date)
     
