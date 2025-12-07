@@ -23,47 +23,76 @@ def plot_volume_mountain(vp_df, stock_code):
     # Calculate cumulative sum across time (columns)
     cumulative_pivot = pivot_df.cumsum(axis=1)
     
-    # Now plot each column (which represents a point in time)
-    fig, ax = plt.subplots(figsize=(12, 8))
+    # Create a single plot
+    fig, ax = plt.subplots(figsize=(18, 10))
+
+    # --- Main Scatter Plot ---
+    # Prepare data for scatter plot
+    plot_data = cumulative_pivot.stack().reset_index()
+    plot_data.columns = ['price', 'time', 'cumulative_volume']
+    plot_data = plot_data[plot_data['cumulative_volume'] > 0]
+
+    # Use time for coloring. Newer times will have warmer colors with plasma.
+    time_numeric = plot_data['time'].astype(np.int64)
     
-    unique_times = cumulative_pivot.columns
-    colors = plt.cm.viridis(np.linspace(0, 1, len(unique_times)))
-    
-    for i, time in enumerate(unique_times):
-        # Get the data for the current time
-        series = cumulative_pivot[time]
-        # Filter out zero volumes to make plotting faster
-        series = series[series > 0]
-        if not series.empty:
-            ax.plot(series.values, series.index, color=colors[i])
+    scatter = ax.scatter(plot_data['cumulative_volume'], plot_data['price'], c=time_numeric, cmap='plasma', s=10, alpha=0.7, zorder=2)
 
-    # Get the final cumulative volume for each price
-    final_cumulative_volume = cumulative_pivot.iloc[:, -1]
-
-    # Determine the volume threshold for the top 70%
-    top_70_percent_threshold = final_cumulative_volume.quantile(0.3)
-
-    # Filter for prices with volume in the top 70%
-    top_prices = final_cumulative_volume[final_cumulative_volume >= top_70_percent_threshold]
-
-    # Plot markers and annotations for these top prices
-    for price, volume in top_prices.items():
-        ax.scatter(volume, price, color='blue', zorder=5)  # zorder to make sure markers are on top
-        ax.text(volume, price, f' {volume:,.0f}', color='blue')
-
-    # Get the latest price
+    # Get the latest price to use for clustering and reference
     latest_price = vp_df.sort_values(by='time', ascending=True).iloc[-1]['price']
 
-    # Add a horizontal line for the latest price
-    ax.axhline(y=latest_price, color='r', linestyle='--', label=f'Latest Price: {latest_price:.2f}')
+    # --- Price Band Clustering and Background ---
+    price_band_width = latest_price * 0.005
+    final_cumulative_volume = cumulative_pivot.iloc[:, -1]
     
-    # Annotate the latest price value on the chart
+    # Create a dataframe from the final volumes
+    final_volume_df = final_cumulative_volume.reset_index()
+    final_volume_df.columns = ['price', 'volume']
+    
+    # Assign each price to a price band
+    final_volume_df['price_band_center'] = (final_volume_df['price'] / price_band_width).round() * price_band_width
+    
+    # Group by the price band and sum the volumes
+    clustered_data = final_volume_df.groupby('price_band_center')['volume'].sum().reset_index()
+
+    # Use a color cycle for the bands
+    band_colors = plt.cm.Pastel2(np.linspace(0, 1, len(clustered_data)))
+
+    for i, row in clustered_data.iterrows():
+        band_center = row['price_band_center']
+        band_volume = row['volume']
+        band_ymin = band_center - price_band_width / 2
+        band_ymax = band_center + price_band_width / 2
+
+        # Draw the background span
+        ax.axhspan(band_ymin, band_ymax, color=band_colors[i], alpha=0.2, zorder=0)
+
+        # Display the total volume on the right
+        ax.text(ax.get_xlim()[1] * 1.01, band_center, f'{band_volume:,.0f}',
+                color='black', va='center', ha='left', fontsize=8)
+
+    # --- Colorbar ---
+    cbar = fig.colorbar(scatter, ax=ax)
+    tick_values = cbar.get_ticks()
+    cbar.set_ticks(tick_values)
+    tick_labels = [pd.to_datetime(int(t)).strftime('%Y-%m-%d %H:%M') for t in tick_values]
+    cbar.set_ticklabels(tick_labels)
+    cbar.set_label('Time')
+
+    # --- Top 70% Volume Markers ---
+    top_70_percent_threshold = final_cumulative_volume.quantile(0.3)
+    top_prices = final_cumulative_volume[final_cumulative_volume >= top_70_percent_threshold]
+
+    for price, volume in top_prices.items():
+        ax.scatter(volume, price, color='blue', zorder=5)
+        ax.text(volume, price, f' {volume:,.0f}', color='blue')
+
+    # --- Latest Price Line ---
+    ax.axhline(y=latest_price, color='r', linestyle='--', label=f'Latest Price: {latest_price:.2f}', zorder=3)
     ax.text(ax.get_xlim()[1], latest_price, f' {latest_price:.2f}', color='red', va='center')
 
+    # --- Final Formatting ---
     ax.legend()
-
-    # Formatting the plot
-    ax.set_title(f'Volume Mountain Map for {stock_code} (Time Granularity)')
+    ax.set_title(f'Volume Mountain Map for {stock_code} with Price Bands')
     ax.set_xlabel('Cumulative Volume')
     ax.set_ylabel('Price')
     ax.grid(True, which='both', linestyle='--', linewidth=0.5)
