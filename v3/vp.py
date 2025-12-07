@@ -35,8 +35,8 @@ def calculate_volume_profile(start_date, end_date, freq='minute5'):
         # Round the price to 2 decimal places
         stock_df['price'] = stock_df['price'].round(2)
 
-        # Group by date and price, then sum the volume
-        volume_profile = stock_df.groupby(['date', 'price'])['volume'].sum().reset_index()
+        # Group by time and price, then sum the volume
+        volume_profile = stock_df.groupby(['time', 'price'])['volume'].sum().reset_index()
         volume_profile = volume_profile.rename(columns={'volume': 'total_volume'})
         volume_profile['code'] = code
         vp_table_list.append(volume_profile)
