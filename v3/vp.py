@@ -19,7 +19,7 @@ def calculate_volume_profile(start_date, end_date, freq='minute5'):
     # Get the merged stock data table
     df = get_stock_merge_table(freq=freq, start_date=start_date, end_date=end_date)
 
-    # Reset index to make 'code' and 'date' columns
+    # Reset index to make 'code', 'time', and 'price' columns
     df = df.reset_index()
 
     # Group by stock code
