@@ -17,10 +17,29 @@ def plot_volume_scatter(df, stock_code):
         return
 
     df['time'] = pd.to_datetime(df['time'], format='%Y%m%d%H%M%S%f')
+    df = df.sort_values(by=['price', 'time'])
     
+    # Identify consecutive points with the same price
+    df['price_group'] = (df['price'] != df['price'].shift()).cumsum()
+    
+    # Aggregate the data
+    agg_df = df.groupby('price_group').agg(
+        time=('time', lambda x: x.iloc[0] + (x.iloc[-1] - x.iloc[0]) / 2),
+        price=('price', 'first'),
+        total_volume=('total_volume', 'sum')
+    ).reset_index()
+
+    # Use qcut to create bins based on the distribution of 'total_volume'
+    try:
+        agg_df['volume_cat'] = pd.qcut(agg_df['total_volume'], q=10, labels=False, duplicates='drop')
+    except ValueError:
+        # If qcut fails (e.g., not enough unique values), use rank
+        agg_df['volume_cat'] = agg_df['total_volume'].rank(method='dense').astype(int)
+
     fig, ax = plt.subplots(figsize=(12, 8))
     
-    scatter = ax.scatter(df['time'], df['price'], c=df['total_volume'], cmap='hot', s=10)
+    # Use the new 'volume_cat' for coloring
+    scatter = ax.scatter(agg_df['time'], agg_df['price'], c=agg_df['volume_cat'], cmap='hot', s=10)
     
     # Add a colorbar to show the volume scale
     cbar = fig.colorbar(scatter, ax=ax)

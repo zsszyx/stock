@@ -55,7 +55,7 @@ def plot_volume_mountain(vp_df, stock_code):
     clustered_data = final_volume_df.groupby('price_band_center')['volume'].sum().reset_index()
 
     # Use a color cycle for the bands
-    band_colors = plt.cm.Pastel2(np.linspace(0, 1, len(clustered_data)))
+    cmap = plt.get_cmap('tab20')
 
     for i, row in clustered_data.iterrows():
         band_center = row['price_band_center']
@@ -64,7 +64,7 @@ def plot_volume_mountain(vp_df, stock_code):
         band_ymax = band_center + price_band_width / 2
 
         # Draw the background span
-        ax.axhspan(band_ymin, band_ymax, color=band_colors[i], alpha=0.2, zorder=0)
+        ax.axhspan(band_ymin, band_ymax, color=cmap(i % cmap.N), alpha=0.2, zorder=0)
 
         # Display the total volume on the right
         ax.text(ax.get_xlim()[1] * 1.01, band_center, f'{band_volume:,.0f}',
