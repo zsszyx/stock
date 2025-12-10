@@ -79,18 +79,18 @@ def plot_volume_mountain(vp_df, stock_code):
     ax1.set_ylabel('Price')
     ax1.grid(True, which='both', linestyle='--', linewidth=0.5)
 
-    # --- Subplot 2: Volume Growth in Current Price Band ---
+    # --- Subplot 2: Volume Increment in Current Price Band ---
     current_band_center = (latest_price / price_band_width).round() * price_band_width
     current_band_prices = final_volume_df[final_volume_df['price_band_center'] == current_band_center]['price']
     
-    band_pivot = cumulative_pivot[cumulative_pivot.index.isin(current_band_prices)]
+    band_pivot = pivot_df[pivot_df.index.isin(current_band_prices)]
     band_time_series = band_pivot.sum(axis=0)
     
     if not band_time_series.empty:
         time_points = band_time_series.index
         volume_points = band_time_series.values
 
-        ax2.scatter(time_points, volume_points, label='Volume in Current Band')
+        ax2.scatter(time_points, volume_points, label='Volume Increment in Current Band')
 
         # Fit a curve (e.g., polynomial)
         time_numeric_for_fit = (time_points - time_points.min()).total_seconds()
@@ -103,9 +103,9 @@ def plot_volume_mountain(vp_df, stock_code):
 
         ax2.plot(smooth_time_dt, smooth_volume, color='red', linestyle='--', label='Fitted Growth Curve')
 
-    ax2.set_title(f'Volume Growth at {current_band_center:.2f} Price Band')
+    ax2.set_title(f'Volume Increment at {current_band_center:.2f} Price Band')
     ax2.set_xlabel('Time')
-    ax2.set_ylabel('Cumulative Volume in Band')
+    ax2.set_ylabel('Volume Increment in Band')
     ax2.legend()
     ax2.grid(True, which='both', linestyle='--', linewidth=0.5)
     plt.setp(ax2.get_xticklabels(), rotation=45, ha="right")
