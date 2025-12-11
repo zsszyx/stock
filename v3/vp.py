@@ -15,7 +15,8 @@ def calculate_volume_profile(start_date, end_date, freq='minute5'):
 
     Returns:
         dict: A dictionary where keys are stock codes and values are dictionaries
-              containing 'volatility', 'volume_profile', and 'focused_volume_ratio'.
+              containing 'volatility', 'volume_profile', 'focused_volume_ratio',
+              and 'recent_focused_concentration_ratio'.
     """
     # Get the merged stock data table
     df = get_stock_merge_table(freq=freq, start_date=start_date, end_date=end_date)
@@ -35,38 +36,62 @@ def calculate_volume_profile(start_date, end_date, freq='minute5'):
 
         # Calculate price volatility
         price_volatility = stock_df['price'].std()
-
-        # Filter out stocks with zero volatility
-        if price_volatility == 0:
-            continue
         
         # Get latest price
         latest_price = stock_df['price'].iloc[-1]
         
         # Round the price to 2 decimal places
-        stock_df['price'] = stock_df['price'].round(2)
+        # stock_df['price'] = stock_df['price'].round(2)
 
         # Group by time and price, then sum the volume
         volume_profile = stock_df.groupby(['time', 'price'])['volume'].sum().reset_index()
         volume_profile = volume_profile.rename(columns={'volume': 'total_volume'})
         
-        # Calculate focused volume ratio
+        # Calculate focused volume ratios
         band_width = price_volatility
         focused_volume_ratio = 0
+        recent_focused_concentration_ratio = 0
+
         if band_width > 0:
             total_stock_volume = volume_profile['total_volume'].sum()
             if total_stock_volume > 0:
+                # Determine target bands
                 latest_price_band_index = round(latest_price / band_width)
                 target_band_indices = [latest_price_band_index - 1, latest_price_band_index, latest_price_band_index + 1]
                 
+                # Add band index to volume_profile
                 volume_profile['band_index'] = (volume_profile['price'] / band_width).round()
-                focused_volume = volume_profile[volume_profile['band_index'].isin(target_band_indices)]['total_volume'].sum()
-                focused_volume_ratio = focused_volume / total_stock_volume
+                
+                # Filter for rows in the focused bands
+                focused_bands_vp = volume_profile[volume_profile['band_index'].isin(target_band_indices)]
+                
+                # Calculate total volume in focused bands for the entire period
+                total_focused_volume = focused_bands_vp['total_volume'].sum()
+
+                # 1. Calculate focused_volume_ratio (focused volume / total stock volume)
+                if total_stock_volume > 0:
+                    focused_volume_ratio = total_focused_volume / total_stock_volume
+
+                # 2. Calculate recent_focused_concentration_ratio (recent focused volume / total focused volume)
+                unique_dates = sorted(volume_profile['time'].dt.date.unique())
+                if len(unique_dates) >= 5:
+                    last_5_days = unique_dates[-5:]
+                    
+                    # Filter the focused_bands_vp for the last 5 days
+                    recent_focused_bands_vp = focused_bands_vp[focused_bands_vp['time'].dt.date.isin(last_5_days)]
+                    
+                    # Calculate volume in focused bands for the last 5 days
+                    recent_focused_volume = recent_focused_bands_vp['total_volume'].sum()
+                    
+                    # Calculate the ratio
+                    if total_focused_volume > 0:
+                        recent_focused_concentration_ratio = recent_focused_volume / total_focused_volume
 
         stock_attributes[code] = {
             'volatility': price_volatility,
             'volume_profile': volume_profile,
-            'focused_volume_ratio': focused_volume_ratio
+            'focused_volume_ratio': focused_volume_ratio,
+            'recent_focused_concentration_ratio': recent_focused_concentration_ratio
         }
 
     return stock_attributes
