@@ -44,7 +44,7 @@ def calculate_volume_profile(start_date, end_date, freq='minute5'):
         # stock_df['price'] = stock_df['price'].round(2)
 
         # Group by time and price, then sum the volume
-        volume_profile = stock_df.groupby(['time', 'price'])['volume'].sum().reset_index()
+        volume_profile = stock_df.groupby(['time', 'price'])['volume'].reset_index()
         volume_profile = volume_profile.rename(columns={'volume': 'total_volume'})
         
         # Calculate focused volume ratios
@@ -128,83 +128,26 @@ if __name__ == '__main__':
     end_date = '2025-12-04'
     
     stock_attributes = calculate_volume_profile(start_date, end_date)
-    
-    if not stock_attributes:
-        print("No stock data found.")
-    else:
-        # Extract volatility and print
-        volatility_dict = {code: data['volatility'] for code, data in stock_attributes.items()}
-        print("Price Volatility by Stock Code:")
-        print(volatility_dict)
-        if volatility_dict:
-            mean_volatility = np.mean(list(volatility_dict.values()))
-            print(f"Mean volatility of all stocks: {mean_volatility}")
+       
+    # New filtering logic based on stock_attributes
+    if stock_attributes:
+        # Sort by volatility and take the top half
+        sorted_by_volatility = sorted(stock_attributes.items(), key=lambda item: item[1]['volatility'], reverse=True)
+        top_half_volatility_codes = {code for code, data in sorted_by_volatility[:len(sorted_by_volatility) // 2]}
 
-        # Extract volume profiles and concatenate
-        vp_table_list = [data['volume_profile'] for data in stock_attributes.values() if 'volume_profile' in data]
-        
-        if not vp_table_list:
-            print("No volume profile data found.")
-        else:
-            all_vp_df = pd.concat(vp_table_list, ignore_index=True)
-            print(f"save all volume profile to volume_profiles.csv")
-            all_vp_df.to_csv("volume_profiles.csv", index=False, encoding='utf-8-sig')
+        # Filter the top half by focused_volume_ratio and take the top 100
+        filtered_by_volatility = {code: data for code, data in stock_attributes.items() if code in top_half_volatility_codes}
+        sorted_by_focused_volume = sorted(filtered_by_volatility.items(), key=lambda item: item[1]['focused_volume_ratio'], reverse=True)
+        top_100_focused_volume_codes = {code for code, data in sorted_by_focused_volume[:100]}
 
-            # Group by stock code
-            for code, group_df in all_vp_df.groupby('code'):
-                group_df['date'] = pd.to_datetime(group_df['date'])
-                unique_dates = sorted(group_df['date'].unique())
-                
-                # Ensure there are enough dates to split into 4 periods
-                if len(unique_dates) < 4:
-                    continue
+        # Filter the result by recent_focused_concentration_ratio and take the top 100 smallest
+        filtered_by_focused_volume = {code: data for code, data in stock_attributes.items() if code in top_100_focused_volume_codes}
+        sorted_by_recent_concentration = sorted(filtered_by_focused_volume.items(), key=lambda item: item[1]['recent_focused_concentration_ratio'])
+        top_100_recent_concentration_codes = {code for code, data in sorted_by_recent_concentration[:100]}
+            
+        # Final intersection of all filters
+        final_selection = top_half_volatility_codes.intersection(top_100_focused_volume_codes).intersection(top_100_recent_concentration_codes)
+            
+        print("\nFiltered Stock Codes based on the new strategy:")
+        print(final_selection)
 
-                # Split dates into 4 periods
-                n_dates = len(unique_dates)
-                period_splits = np.array_split(unique_dates, 4)
-                
-                periods_data = []
-                valid_periods = True
-                for i, period_dates in enumerate(period_splits):
-                    period_df = group_df[group_df['date'].isin(period_dates)]
-                    
-                    # Aggregate volume by price for the period
-                    period_vp = period_df.groupby('price')['total_volume'].sum().reset_index()
-                    period_vp.rename(columns={'total_volume': 'total_volume'}, inplace=True)
-
-                    if period_vp.empty:
-                        valid_periods = False
-                        break
-
-                    poc, va_high, va_low = calculate_value_area_and_poc(period_vp)
-                    
-                    if poc is None or va_high is None or va_low is None:
-                        valid_periods = False
-                        break
-                    
-                    # Calculate summed volume in VA range
-                    va_volume = period_vp[(period_vp['price'] >= va_low) & (period_vp['price'] <= va_high)]['total_volume'].sum()
-                    
-                    periods_data.append({
-                        'poc': poc,
-                        'va_high': va_high,
-                        'va_low': va_low,
-                        'va_volume': va_volume
-                    })
-
-                if not valid_periods or len(periods_data) != 4:
-                    continue
-
-                # New filtering logic
-                is_period1_ok = periods_data[0]['va_volume'] == max(p['va_volume'] for p in periods_data)
-
-                is_period4_ok = (periods_data[3]['poc'] >= periods_data[2]['poc']) and (periods_data[3]['va_volume'] <= 0.5 * periods_data[0]['va_volume'])
-
-                is_period2_ok = periods_data[1]['poc'] == max(p['poc'] for p in periods_data)
-
-                is_period3_ok = periods_data[2]['poc'] == min(p['poc'] for p in periods_data) and (periods_data[2]['va_volume'] == min(p['va_volume'] for p in periods_data)) 
-
-
-                if is_period1_ok and is_period2_ok and is_period3_ok and is_period4_ok:
-                    print(f"Stock {code} matches the criteria. Plotting...")
-                    plot_volume_scatter(group_df, code, period_splits)
