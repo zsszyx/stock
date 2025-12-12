@@ -24,6 +24,8 @@ def calculate_volume_profile(start_date, end_date, freq='minute5'):
     # Reset index to make 'code', 'time', and 'price' columns
     df = df.reset_index()
 
+    df['time'] = pd.to_datetime(df['time'], format='%Y%m%d%H%M%S%f')
+
     # Group by stock code
     grouped_by_code = df.groupby('code')
 
@@ -44,8 +46,8 @@ def calculate_volume_profile(start_date, end_date, freq='minute5'):
         # stock_df['price'] = stock_df['price'].round(2)
 
         # Group by time and price, then sum the volume
-        volume_profile = stock_df.groupby(['time', 'price'])['volume']
-        # volume_profile = volume_profile.rename(columns={'volume': 'total_volume'})
+        volume_profile = stock_df.groupby(['time', 'price'])['volume'].sum().reset_index()
+        volume_profile = volume_profile.rename(columns={'volume': 'total_volume'})
         
         # Calculate focused volume ratios
         band_width = price_volatility
@@ -53,7 +55,7 @@ def calculate_volume_profile(start_date, end_date, freq='minute5'):
         recent_focused_concentration_ratio = 0
 
         if band_width > 0:
-            total_stock_volume = volume_profile['volume'].sum()
+            total_stock_volume = volume_profile['total_volume'].sum()
             if total_stock_volume > 0:
                 # Determine target bands
                 latest_price_band_index = round(latest_price / band_width)
@@ -66,7 +68,7 @@ def calculate_volume_profile(start_date, end_date, freq='minute5'):
                 focused_bands_vp = volume_profile[volume_profile['band_index'].isin(target_band_indices)]
                 
                 # Calculate total volume in focused bands for the entire period
-                total_focused_volume = focused_bands_vp['volume'].sum()
+                total_focused_volume = focused_bands_vp['total_volume'].sum()
 
                 # 1. Calculate focused_volume_ratio (focused volume / total stock volume)
                 if total_stock_volume > 0:
@@ -81,7 +83,7 @@ def calculate_volume_profile(start_date, end_date, freq='minute5'):
                     recent_focused_bands_vp = focused_bands_vp[focused_bands_vp['time'].dt.date.isin(last_5_days)]
                     
                     # Calculate volume in focused bands for the last 5 days
-                    recent_focused_volume = recent_focused_bands_vp['volume'].sum()
+                    recent_focused_volume = recent_focused_bands_vp['total_volume'].sum()
                     
                     # Calculate the ratio
                     if total_focused_volume > 0:
