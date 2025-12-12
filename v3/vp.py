@@ -44,7 +44,7 @@ def calculate_volume_profile(start_date, end_date, freq='minute5'):
         # stock_df['price'] = stock_df['price'].round(2)
 
         # Group by time and price, then sum the volume
-        volume_profile = stock_df.groupby(['time', 'price'])['volume'].reset_index()
+        volume_profile = stock_df.groupby(['time', 'price'])['volume']
         volume_profile = volume_profile.rename(columns={'volume': 'total_volume'})
         
         # Calculate focused volume ratios
@@ -150,4 +150,3 @@ if __name__ == '__main__':
             
         print("\nFiltered Stock Codes based on the new strategy:")
         print(final_selection)
-
