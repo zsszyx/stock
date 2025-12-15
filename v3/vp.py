@@ -158,4 +158,5 @@ if __name__ == '__main__':
         for code in final_selection:
             if code in stock_attributes:
                 vp_df = stock_attributes[code]['volume_profile']
-                plot_volume_mountain(vp_df, code)
+                volatility = stock_attributes[code]['volatility']
+                plot_volume_mountain(vp_df, code, volatility)
