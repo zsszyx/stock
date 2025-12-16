@@ -54,6 +54,7 @@ def calculate_volume_profile(start_date, end_date, freq='minute5'):
         band_width = price_volatility
         focused_volume_ratio = 0
         recent_focused_concentration_ratio = 0
+        last_3_day_concentration_ratio = 0
 
         if band_width > 0:
             total_stock_volume = volume_profile['total_volume'].sum()
@@ -76,26 +77,31 @@ def calculate_volume_profile(start_date, end_date, freq='minute5'):
                 if total_stock_volume > 0:
                     focused_volume_ratio = total_focused_volume / total_stock_volume
 
-                # 2. Calculate recent_focused_concentration_ratio (recent focused volume / total focused volume)
+                # 2. Calculate concentration ratios
                 unique_dates = sorted(volume_profile['time'].dt.date.unique())
+                
+                # Last 1 day concentration
                 if len(unique_dates) >= 1:
                     last_1_day = unique_dates[-1:]
-                    
-                    # Filter the focused_bands_vp for the last 1 day
                     recent_focused_bands_vp = focused_bands_vp[focused_bands_vp['time'].dt.date.isin(last_1_day)]
-                    
-                    # Calculate volume in focused bands for the last 1 day
                     recent_focused_volume = recent_focused_bands_vp['total_volume'].sum()
-                    
-                    # Calculate the ratio
                     if total_focused_volume > 0:
                         recent_focused_concentration_ratio = recent_focused_volume / total_focused_volume
+                
+                # Last 3 days concentration
+                if len(unique_dates) >= 3:
+                    last_3_days = unique_dates[-3:]
+                    last_3_days_focused_bands_vp = focused_bands_vp[focused_bands_vp['time'].dt.date.isin(last_3_days)]
+                    last_3_days_focused_volume = last_3_days_focused_bands_vp['total_volume'].sum()
+                    if total_focused_volume > 0:
+                        last_3_day_concentration_ratio = last_3_days_focused_volume / total_focused_volume
 
         stock_attributes[code] = {
             'volatility': price_volatility,
             'volume_profile': volume_profile,
             'focused_volume_ratio': focused_volume_ratio,
-            'recent_focused_concentration_ratio': recent_focused_concentration_ratio
+            'recent_focused_concentration_ratio': recent_focused_concentration_ratio,
+            'last_3_day_concentration_ratio': last_3_day_concentration_ratio
         }
 
     return stock_attributes
@@ -140,16 +146,24 @@ if __name__ == '__main__':
         sorted_by_volatility = sorted(stock_attributes.items(), key=lambda item: item[1]['volatility'], reverse=True)
         top_half_volatility_codes = {code for code, data in sorted_by_volatility[:len(sorted_by_volatility) // 2]}
 
-        # Filter the full list by focused_volume_ratio and take the top 20
+        # Filter by focused_volume_ratio and take the top 300
         sorted_by_focused_volume = sorted(stock_attributes.items(), key=lambda item: item[1]['focused_volume_ratio'], reverse=True)
-        top_20_focused_volume_codes = {code for code, data in sorted_by_focused_volume[:300]}
+        top_focused_volume_codes = {code for code, data in sorted_by_focused_volume[:300]}
 
-        # Filter the full list by recent_focused_concentration_ratio and take the top 20 smallest
-        sorted_by_recent_concentration = sorted(stock_attributes.items(), key=lambda item: item[1]['recent_focused_concentration_ratio'])
-        top_20_recent_concentration_codes = {code for code, data in sorted_by_recent_concentration[:300]}
+        # Filter by recent_focused_concentration_ratio (last 1 day) and take the top 300 smallest
+        sorted_by_recent_concentration_1_day = sorted(stock_attributes.items(), key=lambda item: item[1]['recent_focused_concentration_ratio'])
+        top_concentration_codes_1_day = {code for code, data in sorted_by_recent_concentration_1_day[:300]}
+
+        # Filter by last_3_day_concentration_ratio and take the top 300 smallest
+        sorted_by_recent_concentration_3_day = sorted(stock_attributes.items(), key=lambda item: item[1]['last_3_day_concentration_ratio'])
+        top_concentration_codes_3_day = {code for code, data in sorted_by_recent_concentration_3_day[:300]}
             
-        # Final intersection of all filters
-        final_selection = top_half_volatility_codes.intersection(top_20_focused_volume_codes).intersection(top_20_recent_concentration_codes)
+        # Final intersection of all four filters
+        final_selection = top_half_volatility_codes.intersection(
+            top_focused_volume_codes,
+            top_concentration_codes_1_day,
+            top_concentration_codes_3_day
+        )
             
         print("\nFiltered Stock Codes based on the new strategy:")
         print(final_selection)
