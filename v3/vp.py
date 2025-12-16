@@ -78,13 +78,13 @@ def calculate_volume_profile(start_date, end_date, freq='minute5'):
 
                 # 2. Calculate recent_focused_concentration_ratio (recent focused volume / total focused volume)
                 unique_dates = sorted(volume_profile['time'].dt.date.unique())
-                if len(unique_dates) >= 3:
-                    last_3_days = unique_dates[-3:]
+                if len(unique_dates) >= 1:
+                    last_1_day = unique_dates[-1:]
                     
-                    # Filter the focused_bands_vp for the last 3 days
-                    recent_focused_bands_vp = focused_bands_vp[focused_bands_vp['time'].dt.date.isin(last_3_days)]
+                    # Filter the focused_bands_vp for the last 1 day
+                    recent_focused_bands_vp = focused_bands_vp[focused_bands_vp['time'].dt.date.isin(last_1_day)]
                     
-                    # Calculate volume in focused bands for the last 3 days
+                    # Calculate volume in focused bands for the last 1 day
                     recent_focused_volume = recent_focused_bands_vp['total_volume'].sum()
                     
                     # Calculate the ratio

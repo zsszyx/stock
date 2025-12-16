@@ -21,6 +21,9 @@ def plot_volume_mountain(vp_df, stock_code, volatility):
     # Pivot to get prices on rows, time on columns
     pivot_df = vp_df.pivot_table(index='price', columns='time', values='total_volume', fill_value=0)
     
+    # Ensure columns (timestamps) are sorted before cumulative sum
+    pivot_df = pivot_df.sort_index(axis=1)
+    
     # Calculate cumulative sum across time (columns)
     cumulative_pivot = pivot_df.cumsum(axis=1)
     
@@ -31,6 +34,9 @@ def plot_volume_mountain(vp_df, stock_code, volatility):
     plot_data = cumulative_pivot.stack().reset_index()
     plot_data.columns = ['price', 'time', 'cumulative_volume']
     plot_data = plot_data[plot_data['cumulative_volume'] > 0]
+
+    # Sort by time to ensure correct layering with alpha blending
+    plot_data = plot_data.sort_values('time')
 
     time_numeric = plot_data['time'].astype(np.int64)
     
