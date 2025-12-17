@@ -55,6 +55,7 @@ def calculate_volume_profile(start_date, end_date, freq='minute5'):
         focused_volume_ratio = 0
         recent_focused_concentration_ratio = 0
         last_3_day_concentration_ratio = 0
+        recent_price_band_concentration = 0
 
         if band_width > 0:
             total_stock_volume = volume_profile['total_volume'].sum()
@@ -96,12 +97,35 @@ def calculate_volume_profile(start_date, end_date, freq='minute5'):
                     if total_focused_volume > 0:
                         last_3_day_concentration_ratio = last_3_days_focused_volume / total_focused_volume
 
+        # 3. Calculate recent concentration in a 5% price band around the latest price
+        price_band_width_5pct = latest_price * 0.05
+        if price_band_width_5pct > 0:
+            target_band_index_5pct = round(latest_price / price_band_width_5pct)
+            
+            volume_profile['band_index_5pct'] = (volume_profile['price'] / price_band_width_5pct).round()
+            
+            focused_bands_vp_5pct = volume_profile[volume_profile['band_index_5pct'] == target_band_index_5pct]
+            
+            total_focused_volume_5pct = focused_bands_vp_5pct['total_volume'].sum()
+
+            unique_dates = sorted(volume_profile['time'].dt.date.unique())
+            if len(unique_dates) >= 1:
+                last_1_day = unique_dates[-1:]
+                recent_focused_bands_vp_5pct = focused_bands_vp_5pct[focused_bands_vp_5pct['time'].dt.date.isin(last_1_day)]
+                recent_focused_volume_5pct = recent_focused_bands_vp_5pct['total_volume'].sum()
+                
+                if total_focused_volume_5pct > 0:
+                    recent_price_band_concentration = recent_focused_volume_5pct / total_focused_volume_5pct
+            
+            volume_profile.drop(columns=['band_index_5pct'], inplace=True, errors='ignore')
+
         stock_attributes[code] = {
             'volatility': price_volatility,
             'volume_profile': volume_profile,
             'focused_volume_ratio': focused_volume_ratio,
             'recent_focused_concentration_ratio': recent_focused_concentration_ratio,
-            'last_3_day_concentration_ratio': last_3_day_concentration_ratio
+            'last_3_day_concentration_ratio': last_3_day_concentration_ratio,
+            'recent_price_band_concentration': recent_price_band_concentration
         }
 
     return stock_attributes
@@ -148,21 +172,26 @@ if __name__ == '__main__':
 
         # Filter by focused_volume_ratio and take the top 300
         sorted_by_focused_volume = sorted(stock_attributes.items(), key=lambda item: item[1]['focused_volume_ratio'], reverse=True)
-        top_focused_volume_codes = {code for code, data in sorted_by_focused_volume[:300]}
+        top_focused_volume_codes = {code for code, data in sorted_by_focused_volume[:400]}
 
         # Filter by recent_focused_concentration_ratio (last 1 day) and take the top 300 smallest
         sorted_by_recent_concentration_1_day = sorted(stock_attributes.items(), key=lambda item: item[1]['recent_focused_concentration_ratio'])
-        top_concentration_codes_1_day = {code for code, data in sorted_by_recent_concentration_1_day[:300]}
+        top_concentration_codes_1_day = {code for code, data in sorted_by_recent_concentration_1_day[:400]}
 
         # Filter by last_3_day_concentration_ratio and take the top 300 smallest
         sorted_by_recent_concentration_3_day = sorted(stock_attributes.items(), key=lambda item: item[1]['last_3_day_concentration_ratio'])
-        top_concentration_codes_3_day = {code for code, data in sorted_by_recent_concentration_3_day[:300]}
+        top_concentration_codes_3_day = {code for code, data in sorted_by_recent_concentration_3_day[:400]}
+
+        # Filter by recent_price_band_concentration and take the top 400
+        sorted_by_price_band_concentration = sorted(stock_attributes.items(), key=lambda item: item[1]['recent_price_band_concentration'])
+        top_price_band_concentration_codes = {code for code, data in sorted_by_price_band_concentration[:400]}
             
-        # Final intersection of all four filters
+        # Final intersection of all five filters
         final_selection = top_half_volatility_codes.intersection(
             top_focused_volume_codes,
             top_concentration_codes_1_day,
-            top_concentration_codes_3_day
+            top_concentration_codes_3_day,
+            top_price_band_concentration_codes
         )
             
         print("\nFiltered Stock Codes based on the new strategy:")
