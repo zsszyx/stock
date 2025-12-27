@@ -27,6 +27,9 @@ openpyxl>=3.0.10
 # 进度条
 tqdm>=4.65.0
 
+# 可视化
+plotly>=5.18.0
+
 # 其他工具
 retry>=0.9.2
 multitasking>=0.0.12
