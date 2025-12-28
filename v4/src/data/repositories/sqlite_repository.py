@@ -1,6 +1,8 @@
 import sqlite3
 import pandas as pd
-from .base import BaseRepository
+from src.data.repositories.base import BaseRepository
+from src.common.enums import TABLE_INDEX_STRATEGY #, TableName, Fields
+
 
 class SqliteRepository(BaseRepository):
     """
@@ -34,8 +36,69 @@ class SqliteRepository(BaseRepository):
         print(f"正在将数据保存到数据库 {self.db_path} 的表 {table_name} 中 (保存索引: {save_index})...")
         df.to_sql(table_name, self.connection, if_exists=if_exists, index=save_index)
         print("数据保存成功。")
+        
+        # 保存后自动创建索引
+        self._create_indexes(table_name)
 
-    def load(self, table_name: str, filters: dict | None = None, index_col: str | list[str] | None = None) -> pd.DataFrame:
+    def _create_indexes(self, table_name: str):
+        """ 根据预定义的策略为表创建索引。 """
+        if table_name in TABLE_INDEX_STRATEGY:
+            columns_to_index = TABLE_INDEX_STRATEGY[table_name]
+            index_name = f"idx_{table_name}_{'_'.join(columns_to_index)}"
+            
+            cursor = self.connection.cursor()
+            
+            # 检查索引是否已存在
+            cursor.execute(f"PRAGMA index_list('{table_name}')")
+            existing_indexes = [row[1] for row in cursor.fetchall()]
+            if index_name in existing_indexes:
+                # print(f"索引 {index_name} 已存在于表 {table_name}。")
+                return
+
+            print(f"正在为表 {table_name} 在列 {columns_to_index} 上创建索引 {index_name}...")
+            try:
+                cols_str = ", ".join([f'"{col}"' for col in columns_to_index])
+                cursor.execute(f"CREATE INDEX {index_name} ON \"{table_name}\" ({cols_str})")
+                self.connection.commit()
+                print("索引创建成功。")
+            except sqlite3.OperationalError as e:
+                # 并发场景下，索引可能刚刚被另一个连接创建
+                if "already exists" in str(e):
+                    print(f"索引 {index_name} 已被其他进程创建。")
+                else:
+                    raise e
+
+    def get_latest_date(self, table_name: str, date_column: str) -> pd.Timestamp | None:
+        """
+        获取指定表中日期时间列的最新（最大）日期。
+
+        :param table_name: 要查询的数据表名称。
+        :param date_column: 日期时间列的名称。
+        :return: 最新的日期 (pd.Timestamp)，如果表为空或不存在则返回 None。
+        """
+        if not self.connection:
+            raise ConnectionError("数据库未连接。请在 with 语句中使用该仓库。")
+
+        cursor = self.connection.cursor()
+        try:
+            # 检查表是否存在
+            cursor.execute(f"SELECT name FROM sqlite_master WHERE type='table' AND name='{table_name}'")
+            if cursor.fetchone() is None:
+                print(f"表 {table_name} 不存在，将进行全量同步。")
+                return None
+
+            query = f"SELECT MAX({date_column}) FROM {table_name}"
+            cursor.execute(query)
+            latest_date_str = cursor.fetchone()[0]
+            
+            if latest_date_str:
+                return pd.to_datetime(latest_date_str)
+            return None
+        except Exception as e:
+            print(f"查询最新日期时出错: {e}")
+            return None
+
+    def load(self, table_name: str, filters: dict | None = None, order_by: str | None = None, limit: int | None = None, index_col: str | list[str] | None = None) -> pd.DataFrame:
         """
         从数据库的指定表中, 加载数据, 支持过滤和索引设置。
 

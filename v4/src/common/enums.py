@@ -15,6 +15,25 @@ class Fields(str, Enum):
     VOL = "volume"
     AMT = "amount"
     SYMBOL = "symbol"
+    IS_COMPLETE = "is_complete"
+    CALENDAR_DATE = "calendar_date"
+    IS_TRADING_DAY = "is_trading_day"
+
+
+FIELD_DTYPES = {
+    Fields.DT: 'datetime64[ns]',
+    Fields.T: 'object',
+    Fields.OPEN: 'float64',
+    Fields.HIGH: 'float64',
+    Fields.LOW: 'float64',
+    Fields.CLOSE: 'float64',
+    Fields.VOL: 'int64',
+    Fields.AMT: 'float64',
+    Fields.SYMBOL: 'object',
+    Fields.IS_COMPLETE: 'bool',
+    Fields.CALENDAR_DATE: 'datetime64[ns]',
+    Fields.IS_TRADING_DAY: 'bool',
+}
 
 
 # Mapping from common aliases to the standard Fields enum
@@ -86,17 +105,27 @@ COLUMN_ALIASES = {
     'amo': Fields.AMT,
     '成交额': Fields.AMT,
     '额': Fields.AMT,
+
+    # Calendar Date
+    'calendar_date': Fields.CALENDAR_DATE,
+    'calendarDate': Fields.CALENDAR_DATE,
+
+    # Is Trading Day
+    'is_trading_day': Fields.IS_TRADING_DAY,
+    'isTradingDay': Fields.IS_TRADING_DAY,
+    'is_trade': Fields.IS_TRADING_DAY,
+    'is_trad': Fields.IS_TRADING_DAY,
 }
 
+@unique
 class DatabaseConfig(str, Enum):
     """
     数据库文件路径配置
     """
-    # 元数据数据库 (股票列表、交易日等)
-    META = 'd:/stock/v4/baostock_meta.db'
-    # K线行情数据库
-    KLINE = 'd:/stock/v4/kline_data.db'
+    # 统一的股票数据库
+    STOCK_DB = 'd:/stock/v4/stock_data.db'
 
+@unique
 class TableName(str, Enum):
     """
     数据表名枚举
@@ -107,5 +136,12 @@ class TableName(str, Enum):
     TRADE_DATES = 'trade_dates'
     # 5分钟K线数据
     KLINE_5MIN = 'kline_5min'
-    # K线数据范围记录
-    KLINE_DATA_RANGE = 'kline_data_range'
+    # 股票数据状态
+    STOCK_DATA_STATUS = 'stock_data_status'
+
+
+# 定义索引策略
+TABLE_INDEX_STRATEGY = {
+    TableName.KLINE_5MIN.value: [Fields.SYMBOL.value, Fields.DT.value],
+    TableName.STOCK_DATA_STATUS.value: [Fields.SYMBOL.value],
+}

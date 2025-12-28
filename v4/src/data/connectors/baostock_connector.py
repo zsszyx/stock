@@ -1,6 +1,7 @@
 import baostock as bs
 import pandas as pd
 from .base import BaseConnector
+from ...common.enums import Fields, FIELD_DTYPES
 
 class BaoStockConnector(BaseConnector):
     """
@@ -23,9 +24,6 @@ class BaoStockConnector(BaseConnector):
             self.bs.logout()
             print("已登出 BaoStock。")
 
-    def fetch(self, **kwargs):
-        """ BaoStockConnector 的主要 fetch 方法, 用于获取K线数据。 """
-        pass # 我们将在下一步实现获取K线数据的逻辑
 
     def get_stock_list(self, date: str | None = None) -> pd.DataFrame:
         """
@@ -107,18 +105,28 @@ class BaoStockConnector(BaseConnector):
 
         result = pd.DataFrame(data_list, columns=rs.fields)
         
-        # 数据清洗和类型转换
-        for col in ['open', 'high', 'low', 'close', 'volume', 'amount']:
-            result[col] = pd.to_numeric(result[col], errors='coerce')
-        
-        # 根据频率创建 datetime 索引
+        # 1. 标准化时间列
         if frequency in ['d', 'w', 'm']:
-            result['datetime'] = pd.to_datetime(result['date'])
+            result[Fields.DT.value] = pd.to_datetime(result['date'])
         else:  # 分钟线
-            result['datetime'] = pd.to_datetime(result['time'], format='%Y%m%d%H%M%S%f')
+            result[Fields.DT.value] = pd.to_datetime(result['time'], format='%Y%m%d%H%M%S%f')
         
-        result.set_index('datetime', inplace=True)
-        result.drop(columns=['time'], inplace=True)
+        # 2. 重命名列以符合内部标准
+        result.rename(columns={'code': Fields.SYMBOL.value}, inplace=True)
+
+        # 3. 准备数据类型映射
+        dtype_map = {field.value: dtype for field, dtype in FIELD_DTYPES.items()}
+
+        # 4. 筛选出我们需要的标准列
+        standard_cols_present = [field.value for field in Fields if field.value in result.columns]
+        result = result[standard_cols_present]
+
+        # 5. 应用标准数据类型
+        final_dtype_map = {col: dtype_map[col] for col in result.columns if col in dtype_map}
+        result = result.astype(final_dtype_map)
+
+        # 6. 设置索引
+        result.set_index(Fields.DT.value, inplace=True)
         
-        print(f"成功获取 {len(result)} 条 {code} 的K线数据。")
+        print(f"成功获取并标准化 {len(result)} 条 {code} 的K线数据。")
         return result
