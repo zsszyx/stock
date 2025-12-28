@@ -94,11 +94,10 @@ class BaoStockConnector(BaseConnector):
         )
         if rs.error_code != '0':
             raise ValueError(f"获取K线数据失败 {code}: {rs.error_msg}")
-        
+
         data_list = []
         while (rs.error_code == '0') and rs.next():
             data_list.append(rs.get_row_data())
-            
         if not data_list:
             print(f"警告: 未找到 {code} 在 {start_date} 到 {end_date} 期间的数据。")
             return pd.DataFrame()
@@ -111,21 +110,20 @@ class BaoStockConnector(BaseConnector):
         else:  # 分钟线
             result[Fields.DT.value] = pd.to_datetime(result['time'], format='%Y%m%d%H%M%S%f')
         
-        # 2. 重命名列以符合内部标准
+        # 2. 重命名列
         result.rename(columns={'code': Fields.SYMBOL.value}, inplace=True)
 
-        # 3. 准备数据类型映射
-        dtype_map = {field.value: dtype for field, dtype in FIELD_DTYPES.items()}
+        # 3. 转换数值类型
+        numeric_cols = [Fields.OPEN.value, Fields.HIGH.value, Fields.LOW.value, Fields.CLOSE.value, Fields.VOL.value, Fields.AMT.value]
+        for col in numeric_cols:
+            if col in result.columns:
+                result[col] = pd.to_numeric(result[col], errors='coerce')
 
         # 4. 筛选出我们需要的标准列
         standard_cols_present = [field.value for field in Fields if field.value in result.columns]
         result = result[standard_cols_present]
 
-        # 5. 应用标准数据类型
-        final_dtype_map = {col: dtype_map[col] for col in result.columns if col in dtype_map}
-        result = result.astype(final_dtype_map)
-
-        # 6. 设置索引
+        # 5. 设置索引
         result.set_index(Fields.DT.value, inplace=True)
         
         print(f"成功获取并标准化 {len(result)} 条 {code} 的K线数据。")

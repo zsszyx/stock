@@ -15,24 +15,43 @@ class Fields(str, Enum):
     VOL = "volume"
     AMT = "amount"
     SYMBOL = "symbol"
-    IS_COMPLETE = "is_complete"
     CALENDAR_DATE = "calendar_date"
     IS_TRADING_DAY = "is_trading_day"
 
+    # Sync Status
+    SYNC_START_DATE = "sync_start_date"
+    SYNC_END_DATE = "sync_end_date"
+    STATUS = "status"
+    LAST_SYNC_TIME = "last_sync_time"
+
+
+@unique
+class SyncStatus(str, Enum):
+    """
+    数据同步状态
+    """
+    DATA_COMPLETE = "complete"
+    DATA_INCOMPLETE = "incomplete"
+    NO_DATA = "no_data"
+    UP_TO_DATE = "up_to_date"
+
 
 FIELD_DTYPES = {
-    Fields.DT: 'datetime64[ns]',
-    Fields.T: 'object',
-    Fields.OPEN: 'float64',
-    Fields.HIGH: 'float64',
-    Fields.LOW: 'float64',
-    Fields.CLOSE: 'float64',
-    Fields.VOL: 'int64',
-    Fields.AMT: 'float64',
-    Fields.SYMBOL: 'object',
-    Fields.IS_COMPLETE: 'bool',
-    Fields.CALENDAR_DATE: 'datetime64[ns]',
-    Fields.IS_TRADING_DAY: 'bool',
+    Fields.DT: 'TEXT',
+    Fields.T: 'TEXT',
+    Fields.OPEN: 'REAL',
+    Fields.HIGH: 'REAL',
+    Fields.LOW: 'REAL',
+    Fields.CLOSE: 'REAL',
+    Fields.VOL: 'REAL',
+    Fields.AMT: 'REAL',
+    Fields.SYMBOL: 'TEXT',
+    Fields.CALENDAR_DATE: 'TEXT',
+    Fields.IS_TRADING_DAY: 'INTEGER',
+    Fields.SYNC_START_DATE: 'TEXT',
+    Fields.SYNC_END_DATE: 'TEXT',
+    Fields.STATUS: 'TEXT',
+    Fields.LAST_SYNC_TIME: 'TEXT',
 }
 
 
@@ -136,12 +155,12 @@ class TableName(str, Enum):
     TRADE_DATES = 'trade_dates'
     # 5分钟K线数据
     KLINE_5MIN = 'kline_5min'
-    # 股票数据状态
-    STOCK_DATA_STATUS = 'stock_data_status'
+    # 同步状态表
+    SYNC_STATUS = 'sync_status'
 
 
 # 定义索引策略
 TABLE_INDEX_STRATEGY = {
     TableName.KLINE_5MIN.value: [Fields.SYMBOL.value, Fields.DT.value],
-    TableName.STOCK_DATA_STATUS.value: [Fields.SYMBOL.value],
+    TableName.SYNC_STATUS.value: [Fields.SYMBOL.value],
 }

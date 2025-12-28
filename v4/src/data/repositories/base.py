@@ -8,7 +8,7 @@ class BaseRepository(ABC):
     """
 
     @abstractmethod
-    def save(self, df: pd.DataFrame, table_name: str, **kwargs):
+    def save_data(self, df: pd.DataFrame, table_name: str, **kwargs):
         """
         将一个 DataFrame 保存到持久化存储的指定表中。
 

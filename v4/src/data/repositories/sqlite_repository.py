@@ -1,7 +1,7 @@
 import sqlite3
 import pandas as pd
 from src.data.repositories.base import BaseRepository
-from src.common.enums import TABLE_INDEX_STRATEGY #, TableName, Fields
+from src.common.enums import TABLE_INDEX_STRATEGY, TableName, Fields, TableName, Fields
 
 
 class SqliteRepository(BaseRepository):
@@ -15,20 +15,37 @@ class SqliteRepository(BaseRepository):
 
     def __enter__(self):
         self.connection = sqlite3.connect(self.db_path)
+        self._create_all_tables()  # 确保所有必要的表都已创建
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         if self.connection:
             self.connection.close()
 
-    def save(self, df: pd.DataFrame, table_name: str, if_exists: str = 'replace', save_index: bool = False):
+    def _create_all_tables(self):
+        """
+        在数据库中创建所有预定义的表，确保它们具有正确的结构和主键。
+        """
+        with self.connection as conn:
+            cursor = conn.cursor()
+            # 创建 sync_status 表，并设置 (symbol, table_name) 为复合主键
+            cursor.execute(f'''
+                CREATE TABLE IF NOT EXISTS "{TableName.SYNC_STATUS.value}" (
+                    "{Fields.SYMBOL.value}" TEXT,
+                    "table_name" TEXT,
+                    "{Fields.SYNC_START_DATE.value}" TEXT,
+                    "{Fields.SYNC_END_DATE.value}" TEXT,
+                    "{Fields.STATUS.value}" TEXT,
+                    "{Fields.LAST_SYNC_TIME.value}" TEXT,
+                    "message" TEXT,
+                    PRIMARY KEY ("{Fields.SYMBOL.value}", "table_name")
+                )
+            ''')
+            print(f"Table '{TableName.SYNC_STATUS.value}' checked/created successfully.")
+
+    def save_data(self, df: pd.DataFrame, table_name: str, if_exists: str = 'append', save_index: bool = False):
         """
         将一个 DataFrame 保存到 SQLite 数据库的指定表中。
-
-        :param df: 要保存的 pandas DataFrame。
-        :param table_name: 要写入的数据表名称。
-        :param if_exists: 如果表已存在的处理方式 ('fail', 'replace', 'append')。
-        :param save_index: 是否将 DataFrame 的索引作为一列保存。
         """
         if not self.connection:
             raise ConnectionError("数据库未连接。请在 with 语句中使用该仓库。")
@@ -37,8 +54,31 @@ class SqliteRepository(BaseRepository):
         df.to_sql(table_name, self.connection, if_exists=if_exists, index=save_index)
         print("数据保存成功。")
         
-        # 保存后自动创建索引
         self._create_indexes(table_name)
+
+    def upsert_data(self, df: pd.DataFrame, table_name: str):
+        """
+        使用 INSERT OR REPLACE 语义将数据更新或插入到表中。
+        """
+        if not self.connection:
+            raise ConnectionError("数据库未连接。请在 with 语句中使用该仓库。")
+
+        print(f"正在向表 {table_name} 中更新/插入 {len(df)} 条数据...")
+        df.to_sql(table_name, self.connection, if_exists='append', index=False, method=self._upsert_method)
+        print("数据更新/插入成功。")
+
+    def _upsert_method(self, table, conn, keys, data_iter):
+        # 对于 to_sql 和 sqlite, conn 参数实际上是一个 cursor 对象
+        cursor = conn
+        cols = ', '.join(f'"{k}"' for k in keys)
+        placeholders = ', '.join(['?'] * len(keys))
+        sql = f'INSERT OR REPLACE INTO "{table.name}" ({cols}) VALUES ({placeholders})'
+        
+        for data in data_iter:
+            cursor.execute(sql, data)
+        
+        # 注意：我们不在这里提交。pandas 的 to_sql 会在所有块处理完毕后统一处理事务。
+
 
     def _create_indexes(self, table_name: str):
         """ 根据预定义的策略为表创建索引。 """
@@ -87,7 +127,7 @@ class SqliteRepository(BaseRepository):
                 print(f"表 {table_name} 不存在，将进行全量同步。")
                 return None
 
-            query = f"SELECT MAX({date_column}) FROM {table_name}"
+            query = f'SELECT MAX("{date_column}") FROM "{table_name}"'
             cursor.execute(query)
             latest_date_str = cursor.fetchone()[0]
             
