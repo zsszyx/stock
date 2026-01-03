@@ -1,0 +1,101 @@
+import sys
+import os
+import pandas as pd
+
+# Add project root to Python path
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
+from sql_op.op import SqlOp
+from sql_op import sql_config
+
+def apply_length_filter(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Applies a length filter to the DataFrame.
+
+    It calculates the number of entries for each stock code, finds the maximum
+    length, and adds a 'length_filter' column. This column is True for stocks
+    whose length is at least 90% of the maximum length, and False otherwise.
+
+    Args:
+        df (pd.DataFrame): The input DataFrame with a 'code' column.
+
+    Returns:
+        pd.DataFrame: The DataFrame with the added 'length_filter' column.
+    """
+    if 'code' not in df.columns:
+        raise ValueError("Input DataFrame must have a 'code' column.")
+
+    # Calculate the length for each stock code
+    code_lengths = df.groupby('code').size()
+    # print(f'code_lengths: {code_lengths}')
+
+    if code_lengths.empty:
+        df['length_filter'] = False
+        return df
+
+    # Find the maximum length
+    mean_length = code_lengths.mean()
+
+    # Determine the threshold
+    length_threshold = mean_length 
+
+    # Identify the codes that pass the filter
+    passing_codes = code_lengths[code_lengths >= length_threshold].index
+    print(f'passing_codes: {len(passing_codes)}')
+
+    # Add the 'length_filter' column
+    df['length_filter'] = df['code'].isin(passing_codes)
+
+    return df
+
+def apply_nan_filter(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Filters data based on the count of non-NaN rows for each stock code.
+
+    A stock is kept if its count of non-NaN rows is greater than or equal to the
+    average count of non-NaN rows across all stocks.
+
+    Args:
+        df (pd.DataFrame): The input DataFrame with stock data, must contain a 'code' column.
+
+    Returns:
+        pd.DataFrame: The DataFrame with an added 'nan_filter' boolean column.
+    """
+    # Drop rows with any NaN values and count the remaining rows for each stock
+    non_nan_lengths = df.dropna().groupby('code').size()
+
+    # Calculate the average length of non-NaN data
+    if non_nan_lengths.empty:
+        # If there's no data left after dropping NaNs, filter everything out
+        df['nan_filter'] = False
+        return df
+        
+    average_length = non_nan_lengths.mean()
+    print(f"Average non-NaN data length: {average_length}")
+
+    # Identify which codes meet the length requirement
+    codes_to_keep = non_nan_lengths[non_nan_lengths >= average_length].index
+    print(f"Codes to keep: {len(codes_to_keep)}")
+
+    # Add the 'nan_filter' column
+    df['nan_filter'] = df['code'].isin(codes_to_keep)
+    
+    return df
+
+
+if __name__ == '__main__':
+    # This is a sample usage of the functions in this file
+    import numpy as np
+
+    sql_op = SqlOp()
+    
+    # Example for apply_length_filter
+    print("--- Testing Length Filter ---")
+    k_data_length = sql_op.read_k_data_by_date_range(sql_config.mintues5_table_name, '2025-12-01', '2026-01-01')
+    if k_data_length is not None and not k_data_length.empty:
+        filtered_data_length = apply_length_filter(k_data_length)
+        filtered_data_length = apply_nan_filter(filtered_data_length)
+
+    sql_op.close()
