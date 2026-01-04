@@ -6,46 +6,68 @@ import sys
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, project_root)
 
-from strategy.distribution import calculate_distribution_metrics
+from strategy.distribution import calculate_distribution_metrics, calculate_pct_change_metrics
+from strategy.filter import apply_length_filter, apply_nan_filter, apply_increase_filter
 from sql_op.op import SqlOp
 from sql_op import sql_config
 
-def select_stocks_by_skew_kurtosis(distribution_metrics_df, n_top=100):
+def select_stocks_by_skew_kurtosis(df: pd.DataFrame, n_top: int = 100):
     """
-    Selects stocks based on the highest kurtosis and the most left-skewed (lowest skewness).
+    Selects stocks based on highest kurtosis, most left-skewed distribution, and
+    most left-skewed pct_chg, after applying all filters.
 
     Args:
-        distribution_metrics_df (pd.DataFrame): DataFrame containing distribution metrics
-                                                per stock, must include 'code', 'month_index',
-                                                'weighted_kurtosis', and 'weighted_skew'.
+        df (pd.DataFrame): The raw DataFrame with stock data.
         n_top (int): The number of top stocks to select for each criterion.
 
     Returns:
-        tuple: A tuple containing three lists:
-               - A list of stock codes with the highest kurtosis.
-               - A list of stock codes with the lowest (most left-skewed) skewness.
-               - A list of stock codes that are in both of the above lists (intersection).
+        tuple: A tuple containing four lists:
+               - Stocks with the highest kurtosis.
+               - Stocks with the most left-skewed distribution.
+               - Stocks with the most left-skewed pct_chg.
+               - The intersection of all three lists.
     """
-    if distribution_metrics_df.empty:
-        return [], [], []
-
-    # We only care about the most recent month's metrics for selection
-    latest_month_index = distribution_metrics_df['month_index'].min()
-    latest_metrics = distribution_metrics_df[distribution_metrics_df['month_index'] == latest_month_index]
-
-    # Sort by kurtosis (descending) and select top N
-    top_kurtosis_stocks = latest_metrics.sort_values(by='weighted_kurtosis', ascending=False).head(n_top)
+    # Apply all filters first
+    df = apply_length_filter(df)
+    df = apply_nan_filter(df)
+    df = apply_increase_filter(df)
     
-    # Sort by skewness (ascending) to find the most left-skewed and select top N
-    top_skew_stocks = latest_metrics.sort_values(by='weighted_skew', ascending=False).head(n_top)
+    df['pass_all_filters'] = df['length_filter'] & df['nan_filter'] & df['increase_filter']
+    filtered_df = df[df['pass_all_filters']].copy()
+
+    if filtered_df.empty:
+        return [], [], [], []
+
+    # Calculate distribution metrics for kurtosis and skew
+    dist_metrics = calculate_distribution_metrics(filtered_df)
+    
+    # Calculate pct_change metrics for pct_chg skew
+    pct_change_metrics = calculate_pct_change_metrics(filtered_df)
+
+    if dist_metrics.empty or pct_change_metrics.empty:
+        return [], [], [], []
+
+    # --- Selection based on distribution metrics ---
+    latest_month_dist = dist_metrics['month_index'].min()
+    latest_dist_metrics = dist_metrics[dist_metrics['month_index'] == latest_month_dist]
+
+    top_kurtosis_stocks = latest_dist_metrics.sort_values(by='weighted_kurtosis', ascending=False).head(n_top)
+    top_skew_stocks = latest_dist_metrics.sort_values(by='weighted_skew', ascending=False).head(n_top)
+
+    # --- Selection based on pct_change metrics ---
+    latest_month_pct = pct_change_metrics['month_index'].min()
+    latest_pct_metrics = pct_change_metrics[pct_change_metrics['month_index'] == latest_month_pct]
+    
+    top_pct_chg_skew_stocks = latest_pct_metrics.sort_values(by='weighted_skew_pct_chg', ascending=True).head(n_top)
 
     kurtosis_list = top_kurtosis_stocks['code'].tolist()
     skew_list = top_skew_stocks['code'].tolist()
+    pct_chg_skew_list = top_pct_chg_skew_stocks['code'].tolist()
 
-    # Find the intersection of the two lists
-    intersection_stocks = list(set(kurtosis_list) & set(skew_list))
+    # Find the intersection of the three lists
+    intersection_stocks = list(set(kurtosis_list) & set(skew_list) & set(pct_chg_skew_list))
 
-    return kurtosis_list, skew_list, intersection_stocks
+    return kurtosis_list, skew_list, pct_chg_skew_list, intersection_stocks
 
 if __name__ == '__main__':
     # --- Example Usage ---
@@ -54,38 +76,35 @@ if __name__ == '__main__':
     sql_op = SqlOp(sql_config.db_path)
     
     # 2. Load data for a specific period
-    table_name = sql_config.mintues5_table_name
-    start_date = '2025-10-01'
-    end_date = '2026-01-01'
+    table_name = sql_config.daily_table_name
+    start_date = '2023-01-01'
+    end_date = '2024-01-01'
     print(f"Loading data from {start_date} to {end_date}...")
     k_data = sql_op.read_k_data_by_date_range(table_name, start_date, end_date)
 
     if not k_data.empty:
-        # 3. Calculate monthly distribution metrics
-        print("Calculating monthly distribution metrics...")
-        dist_metrics = calculate_distribution_metrics(k_data.copy())
+        # 3. Select stocks based on the custom strategy
+        print("Selecting stocks based on multiple criteria for the latest month...")
+        kurtosis_stocks, skew_stocks, pct_chg_skew_stocks, intersection = select_stocks_by_skew_kurtosis(k_data, n_top=25)
 
-        if not dist_metrics.empty:
-            # 4. Select stocks based on the custom strategy
-            print("Selecting stocks based on skew and kurtosis for the latest month...")
-            highest_kurtosis_stocks, most_left_skewed_stocks, intersection = select_stocks_by_skew_kurtosis(dist_metrics, n_top=25)
+        # 4. Print the results
+        print(f"\n--- Top 25 Stocks with Highest Kurtosis ---")
+        print(f"Found {len(kurtosis_stocks)} stocks.")
+        print(kurtosis_stocks)
 
-            # 5. Print the results
-            print(f"\n--- Top 200 Stocks with Highest Kurtosis ---")
-            print(f"Found {len(highest_kurtosis_stocks)} stocks.")
-            print(highest_kurtosis_stocks)
+        print(f"\n--- Top 25 Most Left-Skewed Stocks (Distribution) ---")
+        print(f"Found {len(skew_stocks)} stocks.")
+        print(skew_stocks)
 
-            print(f"\n--- Top 200 Most Left-Skewed Stocks ---")
-            print(f"Found {len(most_left_skewed_stocks)} stocks.")
-            print(most_left_skewed_stocks)
+        print(f"\n--- Top 25 Most Left-Skewed Stocks (Pct Change) ---")
+        print(f"Found {len(pct_chg_skew_stocks)} stocks.")
+        print(pct_chg_skew_stocks)
 
-            print(f"\n--- Intersection of Both Lists ---")
-            print(f"Found {len(intersection)} stocks in the intersection.")
-            print(intersection)
-        else:
-            print("Distribution metrics calculation resulted in an empty DataFrame.")
+        print(f"\n--- Intersection of All Three Lists ---")
+        print(f"Found {len(intersection)} stocks in the intersection.")
+        print(intersection)
     else:
         print("No data loaded from the database.")
 
-    # 6. Close the database connection
+    # 5. Close the database connection
     sql_op.close()

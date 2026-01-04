@@ -92,6 +92,100 @@ def calculate_distribution_metrics(df):
     return distribution_metrics
 
 
+def _calculate_weighted_pct_change_metrics(group):
+    """Helper function to calculate weighted metrics for pct_change."""
+    if group.empty or group['volume'].sum() == 0:
+        return pd.Series({
+            'weighted_mean_pct_chg': np.nan, 'weighted_std_pct_chg': np.nan,
+            'weighted_skew_pct_chg': np.nan, 'weighted_kurt_pct_chg': np.nan,
+            'weighted_mean_abs_pct_chg': np.nan, 'weighted_std_abs_pct_chg': np.nan,
+            'weighted_skew_abs_pct_chg': np.nan, 'weighted_kurt_abs_pct_chg': np.nan
+        })
+
+    volume = group['volume'].astype(float)
+    
+    # Metrics for pct_chg
+    pct_chg = group['pct_chg']
+    weighted_mean_pct_chg = np.average(pct_chg, weights=volume)
+    weighted_var_pct_chg = np.average((pct_chg - weighted_mean_pct_chg)**2, weights=volume)
+    weighted_std_pct_chg = np.sqrt(weighted_var_pct_chg)
+    
+    if weighted_std_pct_chg == 0:
+        weighted_skew_pct_chg = 0
+        weighted_kurt_pct_chg = 0
+    else:
+        third_moment_pct_chg = np.average((pct_chg - weighted_mean_pct_chg)**3, weights=volume)
+        weighted_skew_pct_chg = third_moment_pct_chg / (weighted_std_pct_chg**3)
+        fourth_moment_pct_chg = np.average((pct_chg - weighted_mean_pct_chg)**4, weights=volume)
+        weighted_kurt_pct_chg = (fourth_moment_pct_chg / (weighted_std_pct_chg**4)) - 3
+
+    # Metrics for abs_pct_chg
+    abs_pct_chg = group['abs_pct_chg']
+    weighted_mean_abs_pct_chg = np.average(abs_pct_chg, weights=volume)
+    weighted_var_abs_pct_chg = np.average((abs_pct_chg - weighted_mean_abs_pct_chg)**2, weights=volume)
+    weighted_std_abs_pct_chg = np.sqrt(weighted_var_abs_pct_chg)
+
+    if weighted_std_abs_pct_chg == 0:
+        weighted_skew_abs_pct_chg = 0
+        weighted_kurt_abs_pct_chg = 0
+    else:
+        third_moment_abs_pct_chg = np.average((abs_pct_chg - weighted_mean_abs_pct_chg)**3, weights=volume)
+        weighted_skew_abs_pct_chg = third_moment_abs_pct_chg / (weighted_std_abs_pct_chg**3)
+        fourth_moment_abs_pct_chg = np.average((abs_pct_chg - weighted_mean_abs_pct_chg)**4, weights=volume)
+        weighted_kurt_abs_pct_chg = (fourth_moment_abs_pct_chg / (weighted_std_abs_pct_chg**4)) - 3
+
+    return pd.Series({
+        'weighted_mean_pct_chg': weighted_mean_pct_chg,
+        'weighted_std_pct_chg': weighted_std_pct_chg,
+        'weighted_skew_pct_chg': weighted_skew_pct_chg,
+        'weighted_kurt_pct_chg': weighted_kurt_pct_chg,
+        'weighted_mean_abs_pct_chg': weighted_mean_abs_pct_chg,
+        'weighted_std_abs_pct_chg': weighted_std_abs_pct_chg,
+        'weighted_skew_abs_pct_chg': weighted_skew_abs_pct_chg,
+        'weighted_kurt_abs_pct_chg': weighted_kurt_abs_pct_chg
+    })
+
+
+def calculate_pct_change_metrics(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Calculates distribution metrics for the daily percentage change ('pct_chg')
+    of stock prices, grouped by code and month.
+
+    It computes the skew, kurtosis, mean, and standard deviation for both
+    'pct_chg' and its absolute value.
+
+    Args:
+        df (pd.DataFrame): Input DataFrame with 'code', 'date', and 'close' columns.
+
+    Returns:
+        pd.DataFrame: A DataFrame with metrics for 'pct_chg' and 'abs_pct_chg'.
+    """
+    if not all(col in df.columns for col in ['code', 'date', 'close', 'volume']):
+        raise ValueError("Input DataFrame must have 'code', 'date', 'close', and 'volume' columns.")
+
+    df['date'] = pd.to_datetime(df['date'])
+    df = df.sort_values(by=['code', 'date'])
+    
+    df['volume'] = pd.to_numeric(df['volume'], errors='coerce')
+    df.dropna(subset=['volume'], inplace=True)
+
+    # Calculate daily percentage change
+    df['pct_chg'] = df.groupby('code')['close'].pct_change()
+
+    # Calculate the absolute value of the percentage change
+    df['abs_pct_chg'] = df['pct_chg'].abs()
+    
+    df.dropna(subset=['pct_chg'], inplace=True)
+
+    # Add reverse month index for grouping
+    df = add_reverse_month_index(df)
+
+    # Group by code and month, then apply the weighted calculation
+    result_df = df.groupby(['code', 'month_index']).apply(_calculate_weighted_pct_change_metrics).reset_index()
+
+    return result_df
+
+
 def _calculate_kl_divergence_for_code(group, num_bins=50):
     """Helper function to calculate weekly KL divergence for a single stock code."""
     # Ensure data types are correct before processing
@@ -164,24 +258,22 @@ if __name__ == '__main__':
     from sql_op.op import SqlOp
 
     sql_op = SqlOp()
-    # Load data for a specific period, e.g., one month
+    # Load daily k-data for calculating pct_change metrics
     k_data = sql_op.read_k_data_by_date_range(
-        sql_config.mintues5_table_name,
-        start_date='2025-12-01',
-        end_date='2026-01-01'
+        sql_config.daily_table_name,
+        start_date='2023-01-01',
+        end_date='2024-01-01'
     )
-    k_data['real_price'] = k_data['amount'].astype(float) / k_data['volume'].astype(float)
+
     if k_data is not None and not k_data.empty:
-        print("Calculating weekly KL divergence...")
-        kl_divergence_df = add_week_index(k_data).groupby('code').apply(_calculate_kl_divergence_for_code)
+        print("Calculating pct_change metrics...")
+        pct_change_metrics_df = calculate_pct_change_metrics(k_data)
         
-        if not kl_divergence_df.empty:
-            print("\nWeekly KL Divergence Results:")
-            # Display results for a specific stock to verify
-            # print(kl_divergence_df.loc['sh.600000']) 
-            print(kl_divergence_df.head(10))
+        if not pct_change_metrics_df.empty:
+            print("\nPct Change Metrics Results:")
+            print(pct_change_metrics_df.head(10))
         else:
-            print("Could not calculate KL divergence.")
+            print("Could not calculate pct_change metrics.")
     else:
         print("No data to process for the selected date range.")
 
