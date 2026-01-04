@@ -84,6 +84,47 @@ def apply_nan_filter(df: pd.DataFrame) -> pd.DataFrame:
     
     return df
 
+def apply_increase_filter(df: pd.DataFrame, days: int = 30) -> pd.DataFrame:
+    """
+    Filters stocks based on their maximum price increase over a specified period.
+
+    For each stock, this function calculates the maximum percentage increase from
+    the lowest price to the highest price within the last `days` days. If the
+    maximum increase is more than 8%, the stock is filtered out (marked as False).
+
+    Args:
+        df (pd.DataFrame): DataFrame with stock data, including 'code', 'date',
+                           'low', and 'high' columns.
+        days (int): The number of days to look back for calculating the increase.
+
+    Returns:
+        pd.DataFrame: The DataFrame with an added 'increase_filter' boolean column.
+    """
+    if not all(col in df.columns for col in ['code', 'date', 'low', 'high']):
+        raise ValueError("DataFrame must include 'code', 'date', 'low', and 'high' columns.")
+
+    df['date'] = pd.to_datetime(df['date'])
+    end_date = df['date'].max()
+    start_date = end_date - pd.Timedelta(days=days)
+
+    # Filter the DataFrame to the relevant date range
+    recent_data = df[df['date'] >= start_date]
+
+    # Find the min 'low' and max 'high' for each stock in the period
+    min_low = recent_data.groupby('code')['close'].min()
+    max_high = recent_data.groupby('code')['close'].max()
+
+    # Calculate the percentage increase
+    increase = (max_high - min_low) / min_low
+
+    # Identify codes with an increase of more than 8%
+    filtered_codes = increase[increase > 0.08].index
+
+    # Mark all data for these codes as False
+    df['increase_filter'] = ~df['code'].isin(filtered_codes)
+
+    return df
+
 
 if __name__ == '__main__':
     # This is a sample usage of the functions in this file
@@ -97,5 +138,7 @@ if __name__ == '__main__':
     if k_data_length is not None and not k_data_length.empty:
         filtered_data_length = apply_length_filter(k_data_length)
         filtered_data_length = apply_nan_filter(filtered_data_length)
+        filtered_data_length = apply_increase_filter(filtered_data_length)
+
 
     sql_op.close()
