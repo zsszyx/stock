@@ -85,7 +85,7 @@ if __name__ == '__main__':
     if not k_data.empty:
         # 3. Select stocks based on the custom strategy
         print("Selecting stocks based on multiple criteria for the latest month...")
-        kurtosis_stocks, skew_stocks, pct_chg_skew_stocks, intersection = select_stocks_by_skew_kurtosis(k_data, n_top=25)
+        kurtosis_stocks, skew_stocks, pct_chg_skew_stocks, intersection = select_stocks_by_skew_kurtosis(k_data, n_top=100)
 
         # 4. Print the results
         print(f"\n--- Top 25 Stocks with Highest Kurtosis ---")
