@@ -27,7 +27,7 @@ def add_week_index(df: pd.DataFrame) -> pd.DataFrame:
         return df
 
     # Ensure 'time' column is in datetime format
-    df['time'] = pd.to_datetime(df['time'], format='%Y%m%d%H%M%S%f', errors='coerce')
+    df.loc[:, 'time'] = pd.to_datetime(df['time'], format='%Y%m%d%H%M%S%f', errors='coerce')
     df.dropna(subset=['time'], inplace=True)
 
     if df.empty:
@@ -40,7 +40,7 @@ def add_week_index(df: pd.DataFrame) -> pd.DataFrame:
     days_from_max = (max_date - df['time']).dt.days
 
     # Calculate the reverse week index
-    df['week_index'] = days_from_max // 7
+    df.loc[:, 'week_index'] = days_from_max // 7
     
     return df
 
@@ -61,7 +61,7 @@ def add_reverse_month_index(df: pd.DataFrame) -> pd.DataFrame:
         return df
 
     # Ensure 'time' column is in datetime format
-    df['time'] = pd.to_datetime(df['time'], format='%Y%m%d%H%M%S%f', errors='coerce')
+    df.loc[:, 'time'] = pd.to_datetime(df['time'], format='%Y%m%d%H%M%S%f', errors='coerce')
     df.dropna(subset=['time'], inplace=True)
 
     if df.empty:
@@ -74,7 +74,7 @@ def add_reverse_month_index(df: pd.DataFrame) -> pd.DataFrame:
     days_from_max = (max_date - df['time']).dt.days
 
     # Calculate the reverse month index
-    df['month_index'] = days_from_max // 30
+    df.loc[:, 'month_index'] = days_from_max // 30
     
     return df
 

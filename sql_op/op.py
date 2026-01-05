@@ -73,14 +73,23 @@ class SqlOp:
             print(f"An error occurred during query: {e}")
             return {code: None for code in codes}
 
-    def query(self, query_str: str) -> pd.DataFrame:
+    def query(self, query_str: str, parse_dates=None) -> pd.DataFrame:
         """
         执行一个通用的SQL查询
         :param query_str: 要执行的SQL查询语句
+        :param parse_dates: 需要解析为日期的列名列表
         :return: 包含查询结果的DataFrame
         """
         try:
-            return pd.read_sql(query_str, self.engine)
+            df = pd.read_sql(query_str, self.engine)
+            if parse_dates:
+                for col in parse_dates:
+                    if col in df.columns:
+                        if col == 'time':
+                            df[col] = pd.to_datetime(df[col], format='%Y%m%d%H%M%S%f', errors='coerce')
+                        else:
+                            df[col] = pd.to_datetime(df[col], errors='coerce')
+            return df
         except Exception as e:
             print(f"An error occurred during query: {e}")
             return None
@@ -91,7 +100,7 @@ class SqlOp:
         :param table_name: 表名
         :return: 包含所有K线数据的DataFrame
         """
-        return self.query(f"SELECT * FROM {table_name}")
+        return self.query(f"SELECT * FROM {table_name}", parse_dates=['date', 'time'])
 
     def read_k_data_by_date_range(self, table_name: str, start_date: str, end_date: str) -> pd.DataFrame:
         """
@@ -102,7 +111,7 @@ class SqlOp:
         :return: 包含指定日期范围内K线数据的DataFrame
         """
         query_str = f"SELECT * FROM {table_name} WHERE date >= '{start_date}' AND date <= '{end_date}'"
-        return self.query(query_str)
+        return self.query(query_str, parse_dates=['date', 'time'])
 
     def close(self):
         """

@@ -104,6 +104,8 @@ def apply_increase_filter(df: pd.DataFrame, days: int = 30) -> pd.DataFrame:
         raise ValueError("DataFrame must include 'code', 'date', 'low', and 'high' columns.")
 
     df['date'] = pd.to_datetime(df['date'])
+    df['low'] = pd.to_numeric(df['low'], errors='coerce')
+    df['high'] = pd.to_numeric(df['high'], errors='coerce')
     end_date = df['date'].max()
     start_date = end_date - pd.Timedelta(days=days)
 
@@ -111,8 +113,8 @@ def apply_increase_filter(df: pd.DataFrame, days: int = 30) -> pd.DataFrame:
     recent_data = df[df['date'] >= start_date]
 
     # Find the min 'low' and max 'high' for each stock in the period
-    min_low = recent_data.groupby('code')['close'].min()
-    max_high = recent_data.groupby('code')['close'].max()
+    min_low = recent_data.groupby('code')['low'].min()
+    max_high = recent_data.groupby('code')['high'].max()
 
     # Calculate the percentage increase
     increase = (max_high - min_low) / min_low

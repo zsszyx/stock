@@ -69,25 +69,24 @@ def calculate_distribution_metrics(df):
                       'weighted_mean', 'weighted_std', 'weighted_skew',
                       and 'weighted_kurtosis'.
     """
-    # Ensure 'volume' and 'amount' are numeric, coercing errors
-    df['volume'] = pd.to_numeric(df['volume'], errors='coerce')
-    df['amount'] = pd.to_numeric(df['amount'], errors='coerce')
+    df.loc[:, 'volume'] = pd.to_numeric(df['volume'], errors='coerce')
+    df.loc[:, 'amount'] = pd.to_numeric(df['amount'], errors='coerce')
 
     # Drop rows where 'volume' or 'amount' are NaN or volume is 0
     df.dropna(subset=['volume', 'amount'], inplace=True)
-    df = df[df['volume'] > 0]
+    df = df[df['volume'] > 0].copy()
 
     if df.empty:
         return pd.DataFrame()
 
     # Calculate real_price
-    df['real_price'] = df['amount'] / df['volume']
+    df.loc[:, 'real_price'] = df['amount'] / df['volume']
 
     # Add reverse month index for grouping
     df = add_reverse_month_index(df)
 
     # Group by stock code and month index, then apply the weighted calculation
-    distribution_metrics = df.groupby(['code', 'month_index']).apply(_calculate_weighted_metrics).reset_index()
+    distribution_metrics = df.groupby(['code', 'month_index']).apply(_calculate_weighted_metrics, include_groups=False).reset_index()
 
     return distribution_metrics
 
@@ -163,17 +162,18 @@ def calculate_pct_change_metrics(df: pd.DataFrame) -> pd.DataFrame:
     if not all(col in df.columns for col in ['code', 'date', 'close', 'volume']):
         raise ValueError("Input DataFrame must have 'code', 'date', 'close', and 'volume' columns.")
 
-    df['date'] = pd.to_datetime(df['date'])
+    df.loc[:, 'date'] = pd.to_datetime(df['date'])
     df = df.sort_values(by=['code', 'date'])
     
-    df['volume'] = pd.to_numeric(df['volume'], errors='coerce')
-    df.dropna(subset=['volume'], inplace=True)
+    df.loc[:, 'volume'] = pd.to_numeric(df['volume'], errors='coerce')
+    df.loc[:, 'close'] = pd.to_numeric(df['close'], errors='coerce')
+    df.dropna(subset=['volume', 'close'], inplace=True)
 
     # Calculate daily percentage change
-    df['pct_chg'] = df.groupby('code')['close'].pct_change()
+    df.loc[:, 'pct_chg'] = df.groupby('code')['close'].pct_change()
 
     # Calculate the absolute value of the percentage change
-    df['abs_pct_chg'] = df['pct_chg'].abs()
+    df.loc[:, 'abs_pct_chg'] = df['pct_chg'].abs()
     
     df.dropna(subset=['pct_chg'], inplace=True)
 
@@ -181,7 +181,7 @@ def calculate_pct_change_metrics(df: pd.DataFrame) -> pd.DataFrame:
     df = add_reverse_month_index(df)
 
     # Group by code and month, then apply the weighted calculation
-    result_df = df.groupby(['code', 'month_index']).apply(_calculate_weighted_pct_change_metrics).reset_index()
+    result_df = df.groupby(['code', 'month_index']).apply(_calculate_weighted_pct_change_metrics, include_groups=False).reset_index()
 
     return result_df
 
