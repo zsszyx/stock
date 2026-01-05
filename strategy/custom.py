@@ -77,8 +77,8 @@ if __name__ == '__main__':
     
     # 2. Load data for a specific period
     table_name = sql_config.daily_table_name
-    start_date = '2023-01-01'
-    end_date = '2024-01-01'
+    start_date = '2025-12-01'
+    end_date = '2026-01-01'
     print(f"Loading data from {start_date} to {end_date}...")
     k_data = sql_op.read_k_data_by_date_range(table_name, start_date, end_date)
 

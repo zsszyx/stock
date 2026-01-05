@@ -8,7 +8,7 @@ class SqlOp:
 
     def upsert_df_to_db(self, df: pd.DataFrame, table_name: str, index: bool = False):
         """
-        将DataFrame upsert到数据库
+        将DataFrame upsert到数据库。如果表不存在，则创建表。
         :param df: 要保存的DataFrame
         :param table_name: 数据库中的表名
         :param index: bool, default False. Write DataFrame index as a column.
@@ -17,26 +17,29 @@ class SqlOp:
             return
 
         temp_table_name = f"temp_{table_name}"
-        
         try:
+            with self.engine.connect() as conn:
+                # 检查目标表是否存在
+                if not self.engine.dialect.has_table(conn, table_name):
+                    # 如果表不存在，直接将DataFrame写入新表
+                    df.to_sql(table_name, self.engine, if_exists='fail', index=index)
+                    return
+
+            # 如果表已存在，则执行upsert操作
             # 将DataFrame写入临时表
             df.to_sql(temp_table_name, self.engine, if_exists='replace', index=index)
 
-            # 开始一个事务
             with self.engine.begin() as conn:
-                # 获取索引列和所有列
-                index_cols = df.index.names
-                all_cols = index_cols + df.columns.tolist()
-                
+                # 从临时表获取列名
+                temp_df_cols = pd.read_sql(f'SELECT * FROM "{temp_table_name}" LIMIT 0', conn).columns.tolist()
+                cols_str = ', '.join(f'"{col}"' for col in temp_df_cols)
+
                 # 构建INSERT OR REPLACE语句
                 insert_sql = f"""
-                    INSERT OR REPLACE INTO {table_name} ({', '.join(all_cols)})
-                    SELECT {', '.join(all_cols)} FROM {temp_table_name}
+                    INSERT OR REPLACE INTO "{table_name}" ({cols_str})
+                    SELECT {cols_str} FROM "{temp_table_name}"
                 """
                 conn.execute(text(insert_sql))
-
-            # print(f"DataFrame successfully upserted to table '{table_name}'.")
-
         except Exception as e:
             print(f"An error occurred: {e}")
 
