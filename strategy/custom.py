@@ -78,7 +78,7 @@ if __name__ == '__main__':
     # 2. Load data for a specific period
     table_name = sql_config.mintues5_table_name
     start_date = '2025-12-01'
-    end_date = '2026-01-01'
+    end_date = '2026-01-09'
     print(f"Loading data from {start_date} to {end_date}...")
     k_data = sql_op.read_k_data_by_date_range(table_name, start_date, end_date)
 
