@@ -86,7 +86,7 @@ def calculate_distribution_metrics(df):
     df = add_reverse_month_index(df)
 
     # Group by stock code and month index, then apply the weighted calculation
-    distribution_metrics = df.groupby(['code', 'month_index']).apply(_calculate_weighted_metrics, include_groups=False).reset_index()
+    distribution_metrics = df.groupby(['code', 'week_index']).apply(_calculate_weighted_metrics, include_groups=False).reset_index()
 
     return distribution_metrics
 
@@ -181,76 +181,125 @@ def calculate_pct_change_metrics(df: pd.DataFrame) -> pd.DataFrame:
     df = add_reverse_month_index(df)
 
     # Group by code and month, then apply the weighted calculation
-    result_df = df.groupby(['code', 'month_index']).apply(_calculate_weighted_pct_change_metrics, include_groups=False).reset_index()
+    result_df = df.groupby(['code', 'week_index']).apply(_calculate_weighted_pct_change_metrics, include_groups=False).reset_index()
 
     return result_df
 
 
-def _calculate_kl_divergence_for_code(group, num_bins=50):
-    """Helper function to calculate weekly KL divergence for a single stock code."""
-    # Ensure data types are correct before processing
-    group['real_price'] = pd.to_numeric(group['real_price'], errors='coerce')
-    group['volume'] = pd.to_numeric(group['volume'], errors='coerce')
-    group.dropna(subset=['real_price', 'volume'], inplace=True)
-
-    # If after cleaning, the group is empty, return an empty DataFrame
-    if group.empty:
-        return pd.DataFrame(columns=['kl_divergence'])
-
-    group = group.sort_values('week_index')
+def _calculate_divergence_for_code(df_code, window_size=5, step=1, num_bins=50):
+    """Helper to calculate rolling KL divergence for a single stock code based on trading days."""
+    df_code = df_code.sort_values('date').reset_index(drop=True)
     
-    # Determine global bins for this stock
-    min_price = group['real_price'].min()
-    max_price = group['real_price'].max()
-    
-    # If all prices are the same, divergence is not meaningful
-    if min_price == max_price:
-        return pd.DataFrame({
-            'week_index': group['week_index'].unique(),
-            'kl_divergence': np.nan
-        }).set_index('week_index')
+    # Get unique dates for this stock
+    unique_dates = df_code['date'].dt.date
+    unique_dates = pd.Series(unique_dates).unique()
+    unique_dates.sort()
 
-    bins = np.linspace(min_price, max_price, num_bins + 1)
-    
-    # Get weighted histogram for each week
-    weekly_dists = {}
-    for week, week_group in group.groupby('week_index'):
-        # Use volume as weights for the histogram
-        hist, _ = np.histogram(
-            week_group['real_price'],
-            bins=bins,
-            weights=week_group['volume']
-        )
+    results = []
+
+    # Iterate through unique dates, ensuring we have enough history to form two windows
+    for i in range(window_size, len(unique_dates)):
         
-        # Normalize to get a probability distribution
-        if hist.sum() > 0:
-            weekly_dists[week] = hist / hist.sum()
+        # Define the date ranges for the two consecutive windows
+        # Window P (current): [t-window_size+1, t]
+        date_end_p = unique_dates[i]
+        date_start_p = unique_dates[i - window_size + 1]
+        
+        # Window Q (previous): [t-window_size, t-1]
+        date_end_q = unique_dates[i - 1]
+        date_start_q = unique_dates[i - window_size]
+
+        # Select data for the windows
+        window_p = df_code[(df_code['date'].dt.date >= date_start_p) & (df_code['date'].dt.date <= date_end_p)]
+        window_q = df_code[(df_code['date'].dt.date >= date_start_q) & (df_code['date'].dt.date <= date_end_q)]
+
+        if window_p.empty or window_q.empty or window_p['volume'].sum() == 0 or window_q['volume'].sum() == 0:
+            continue
+
+        # Determine common price bins for both distributions
+        min_price = min(window_p['real_price'].min(), window_q['real_price'].min())
+        max_price = max(window_p['real_price'].max(), window_q['real_price'].max())
+
+        if min_price == max_price:
+            kl_div = 0.0
         else:
-            weekly_dists[week] = np.zeros(num_bins)
+            bins = np.linspace(min_price, max_price, num_bins + 1)
+            
+            # Explicitly convert to float arrays to prevent dtype errors
+            real_price_p = window_p['real_price'].to_numpy(dtype=float)
+            volume_p = window_p['volume'].to_numpy(dtype=float)
+            
+            real_price_q = window_q['real_price'].to_numpy(dtype=float)
+            volume_q = window_q['volume'].to_numpy(dtype=float)
 
-    # Calculate KL divergence between consecutive weeks
-    weeks = sorted(weekly_dists.keys())
-    kl_divergences = {}
-    
-    # The first week has no previous week to compare to
-    if weeks:
-        kl_divergences[weeks[0]] = np.nan
-        
-    for i in range(1, len(weeks)):
-        prev_week = weeks[i-1]
-        curr_week = weeks[i]
-        
-        p_dist = weekly_dists[curr_week]
-        q_dist = weekly_dists[prev_week]
-        
-        # Use scipy's entropy which calculates KL divergence: sum(p * log(p / q))
-        # It handles p=0 and q=0 cases gracefully.
-        # We add a small epsilon to avoid log(0) or division by zero if not handled.
-        epsilon = 1e-10
-        kl_div = entropy(p_dist + epsilon, q_dist + epsilon)
-        kl_divergences[curr_week] = kl_div
-        
-    return pd.DataFrame.from_dict(kl_divergences, orient='index', columns=['kl_divergence'])
+            # Create weighted histograms
+            hist_p, _ = np.histogram(real_price_p, bins=bins, weights=volume_p)
+            hist_q, _ = np.histogram(real_price_q, bins=bins, weights=volume_q)
+
+            # Normalize to get probability distributions, handle sum is 0 case
+            sum_hist_p = hist_p.sum()
+            sum_hist_q = hist_q.sum()
+
+            if sum_hist_p == 0 or sum_hist_q == 0:
+                continue
+
+            dist_p = hist_p / sum_hist_p
+            dist_q = hist_q / sum_hist_q
+            
+            # Calculate KL Divergence (P || Q)
+            epsilon = 1e-10
+            kl_div = entropy(dist_p + epsilon, dist_q + epsilon)
+
+        results.append({
+            'date': pd.to_datetime(date_end_p), # Use the end date of the current window
+            'kl_divergence': kl_div
+        })
+
+    return pd.DataFrame(results)
+
+
+def calculate_rolling_distribution_divergence(df, window_size=5, step=1):
+    """
+    Calculates the rolling KL divergence of the weighted real price distribution.
+
+    For each stock, it computes the KL divergence between the distribution of
+    days [t-5, t] and [t-6, t-1] with a step of 5 days.
+
+    Args:
+        df (pd.DataFrame): DataFrame with daily stock data, including 'code', 'date',
+                           'amount', and 'volume'.
+        window_size (int): The size of the rolling window (e.g., 5 days).
+        step (int): The step size for the rolling calculation.
+
+    Returns:
+        pd.DataFrame: A DataFrame with 'code', 'date', and 'kl_divergence'.
+    """
+    if not all(col in df.columns for col in ['code', 'date', 'amount', 'volume']):
+        raise ValueError("Input DataFrame must have 'code', 'date', 'amount', and 'volume' columns.")
+
+    df.loc[:, 'date'] = pd.to_datetime(df['date'])
+    df.loc[:, 'amount'] = pd.to_numeric(df['amount'], errors='coerce')
+    df.loc[:, 'volume'] = pd.to_numeric(df['volume'], errors='coerce')
+    df.dropna(subset=['amount', 'volume'], inplace=True)
+    df = df[df['volume'] > 0].copy()
+
+    if df.empty:
+        return pd.DataFrame()
+
+    df.loc[:, 'real_price'] = df['amount'] / df['volume']
+
+    # Group by code and apply the divergence calculation
+    divergence_df = df.groupby('code').apply(
+        _calculate_divergence_for_code,
+        window_size=window_size,
+        step=step
+    ).reset_index()
+
+    # Drop the extra 'level_1' column that may be created by apply
+    if 'level_1' in divergence_df.columns:
+        divergence_df.drop(columns=['level_1'], inplace=True)
+
+    return divergence_df
 
 
 if __name__ == '__main__':
@@ -258,22 +307,23 @@ if __name__ == '__main__':
     from sql_op.op import SqlOp
 
     sql_op = SqlOp()
-    # Load daily k-data for calculating pct_change metrics
+    # Load daily k-data for calculating rolling divergence
     k_data = sql_op.read_k_data_by_date_range(
-        sql_config.daily_table_name,
-        start_date='2023-01-01',
-        end_date='2024-01-01'
+        sql_config.mintues5_table_name,
+        start_date='2025-12-29',
+        end_date='2026-01-10'
     )
 
     if k_data is not None and not k_data.empty:
-        print("Calculating pct_change metrics...")
-        pct_change_metrics_df = calculate_pct_change_metrics(k_data)
+        print("Calculating rolling distribution divergence...")
+        divergence_results = calculate_rolling_distribution_divergence(k_data)
         
-        if not pct_change_metrics_df.empty:
-            print("\nPct Change Metrics Results:")
-            print(pct_change_metrics_df.head(10))
+        if not divergence_results.empty:
+            print("\nRolling Divergence Results:")
+            # Sort by divergence to see the most significant shifts
+            print(divergence_results.sort_values('kl_divergence', ascending=False).head(20))
         else:
-            print("Could not calculate pct_change metrics.")
+            print("Could not calculate rolling divergence.")
     else:
         print("No data to process for the selected date range.")
 
