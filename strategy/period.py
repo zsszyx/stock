@@ -44,6 +44,40 @@ def add_week_index(df: pd.DataFrame) -> pd.DataFrame:
     
     return df
 
+def add_2_week_index(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Adds a reverse chronological 2-week index to the DataFrame based on a 14-day period.
+
+    The index starts from 0 for the most recent 14-day period and increases for
+    earlier periods. This ensures the most recent data chunk is always a full 2-week period.
+
+    Args:
+        df (pd.DataFrame): The input DataFrame with a 'time' column.
+
+    Returns:
+        pd.DataFrame: The DataFrame with an added 'week_2_index' column.
+    """
+    if 'time' not in df.columns or df.empty:
+        return df
+
+    # Ensure 'time' column is in datetime format
+    df.loc[:, 'time'] = pd.to_datetime(df['time'], format='%Y%m%d%H%M%S%f', errors='coerce')
+    df.dropna(subset=['time'], inplace=True)
+
+    if df.empty:
+        return df
+
+    # Find the most recent date in the dataset
+    max_date = df['time'].max()
+
+    # Calculate the number of days from the max_date for each entry
+    days_from_max = (max_date - df['time']).dt.days
+
+    # Calculate the reverse 2-week index
+    df.loc[:, 'week_2_index'] = days_from_max // 14
+    
+    return df
+
 def add_reverse_month_index(df: pd.DataFrame) -> pd.DataFrame:
     """
     Adds a reverse chronological month index to the DataFrame based on a 30-day period.
@@ -90,6 +124,13 @@ if __name__ == '__main__':
         k_data_with_week = add_week_index(k_data.copy())
         print("Week index values:")
         print(k_data_with_week['week_index'].value_counts().sort_index())
+        print("\n")
+
+        # --- Test 2-Week Index ---
+        print("--- Testing 2-Week Index ---")
+        k_data_with_2_week = add_2_week_index(k_data.copy())
+        print("2-Week index values:")
+        print(k_data_with_2_week['week_2_index'].value_counts().sort_index())
         print("\n")
 
         # --- Test Reverse Month Index ---
