@@ -49,7 +49,7 @@ class CreateConceptTableTask:
         if all_stocks_concepts:
             result_df = pd.DataFrame(all_stocks_concepts)
             result_df.set_index(['code', 'concept_code'], inplace=True)
-            self.sql_op.upsert_df_to_db(result_df, sql_config.concept_constituent_ths_table_name, index=True)
+            self.sql_op.save(result_df, sql_config.concept_constituent_ths_table_name, index=True)
             print("Successfully saved concept constituents to the database.")
         else:
             print("No constituent stocks found for any concept.")

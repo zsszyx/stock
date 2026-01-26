@@ -1,10 +1,19 @@
 import pandas as pd
 from sqlalchemy import create_engine, text
-from . import sql_config
+import sys
+import os
+# Add the root directory to the Python path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+print(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from sql_op import sql_config
 
 class SqlOp:
     def __init__(self, db_path=sql_config.db_path):
         self.engine = create_engine(db_path)
+
+    def save(self, df: pd.DataFrame, table_name: str, index: bool = False):
+        df.to_sql(table_name, self.engine, if_exists='replace', index=index)
+        return df
 
     def upsert_df_to_db(self, df: pd.DataFrame, table_name: str, index: bool = False):
         """
@@ -113,6 +122,41 @@ class SqlOp:
         query_str = f"SELECT * FROM {table_name} WHERE date >= '{start_date}' AND date <= '{end_date}'"
         return self.query(query_str, parse_dates=['date', 'time'])
 
+    def read_k_data_by_date_range_with_concept(self, table_name: str, start_date: str, end_date: str) -> pd.DataFrame:
+        """
+        读取指定日期范围内的K线数据，并关联概念信息
+        :param table_name: 表名
+        :param start_date: 开始日期
+        :param end_date: 结束日期
+        :return: 包含指定日期范围内K线数据和概念信息的DataFrame
+        """
+        k_data_df = self.read_k_data_by_date_range(table_name, start_date, end_date)
+        if k_data_df is None or k_data_df.empty:
+            return pd.DataFrame()
+
+        concept_df = self.read_concept_constituent()
+        if concept_df is None or concept_df.empty:
+            return k_data_df
+
+        k_data_df['code_no_prefix'] = k_data_df['code'].str[3:]
+        
+        concept_to_merge = concept_df[['code', 'concept', 'concept_code']].rename(columns={'code': 'c_code'})
+
+        merged_df = pd.merge(k_data_df, concept_to_merge, left_on='code_no_prefix', right_on='c_code', how='left')
+
+        merged_df.drop(columns=['code_no_prefix', 'c_code'], inplace=True, errors='ignore')
+
+        return merged_df
+    
+    def read_concept_constituent(self):
+        """
+        读取概念信息
+        :return: 包含概念信息的DataFrame
+        """
+        concept_table_name = sql_config.concept_constituent_ths_table_name
+        query_str = f"SELECT * FROM {concept_table_name}"
+        return self.query(query_str)
+
     def close(self):
         """
         关闭数据库引擎，释放所有连接。
@@ -123,17 +167,11 @@ class SqlOp:
 if __name__ == '__main__':
     # 示例用法
     # 创建一个SqlOp实例
-    sql_op = SqlOp()
+    sqlop = SqlOp()
 
     # 创建一个示例DataFrame
-    data = {'col1': [1, 2], 'col2': [3, 4]}
-    df_to_save = pd.DataFrame(data)
-
-    # 将DataFrame保存到数据库
-    table_name = sql_config.mintues5_table_name
-    sql_op.save_df_to_db(df_to_save, table_name)
-
-    # 从数据库查询数据
-    query_result_df = sql_op.query(f"SELECT * FROM {table_name}")
-    print("Query result:")
-    print(query_result_df)
+    # res = sqlop.read_concept_constituent()
+    # print(res)
+    res = sqlop.read_k_data_by_date_range_with_concept(sql_config.mintues5_table_name, '2025-12-01', '2026-01-01')
+    print(res.tail(10))
+    print(res.info())

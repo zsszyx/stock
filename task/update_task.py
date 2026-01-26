@@ -65,4 +65,4 @@ class UpdateTask:
 
 if __name__ == '__main__':
     task = UpdateTask()
-    task.run_init_mintues5_task(date='2025-12-01', start_date='2025-12-01', end_date='2026-01-09')
+    task.run_init_mintues5_task(date='2025-12-01', start_date='2025-12-01', end_date='2026-01-22')
