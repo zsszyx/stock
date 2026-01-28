@@ -33,15 +33,27 @@ def run_kurtosis_strategy():
     sql_operator = op.SqlOp()
     
     # 1. Get the last 5 days of data
-    today = datetime.date.today()
-    end_date = today.strftime('%Y-%m-%d')
-    start_date = (today - datetime.timedelta(days=5)).strftime('%Y-%m-%d')
+    # Get actual available dates from DB to avoid empty result on weekends/holidays
+    date_query = f"SELECT DISTINCT date FROM {sql_config.mintues5_table_name} ORDER BY date DESC LIMIT 10"
+    dates_df = sql_operator.query(date_query)
+    1
+    if dates_df is None or dates_df.empty:
+        print("No data found in database.")
+        return
+
+    dates = sorted(dates_df['date'].astype(str).tolist())
+    start_date = dates[0]
+    end_date = dates[-1]
+    print(f"Analyzing data from {start_date} to {end_date}")
     
     k_data = sql_operator.read_k_data_by_date_range(sql_config.mintues5_table_name, start_date, end_date)
     
     if k_data.empty:
         print("No data found for the last 5 days.")
         return
+
+    # Normalize stock codes (remove sh./sz. prefix)
+    k_data['code'] = k_data['code'].astype(str).apply(lambda x: x.split('.')[-1])
 
     # 2. Calculate price and weighted kurtosis for each stock
     k_data = apply_volume_zero_filter(k_data)
@@ -84,7 +96,8 @@ def run_kurtosis_strategy():
 
     print("Top 3 Concepts by Average Kurtosis:")
     for concept_code, avg_kurt in top_3_concepts:
-        concept_name = concept_constituents[concept_constituents['concept_code'] == concept_code]['concept_name'].iloc[0]
+        # Correct column name is 'concept', not 'concept_name'
+        concept_name = concept_constituents[concept_constituents['concept_code'] == concept_code]['concept'].iloc[0]
         print(f"\nConcept: {concept_name} (Code: {concept_code}), Average Kurtosis: {avg_kurt:.2f}")
         
         # 6. Get top 5 stocks in this concept by kurtosis
