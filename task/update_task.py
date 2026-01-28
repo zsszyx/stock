@@ -26,7 +26,7 @@ class UpdateTask:
             print(f"Error fetching {code}: {e}")
             return None
 
-    def run_init_mintues5_task(self, start_date: str, end_date: str, max_workers: int = 10, batch_size: int = 50):
+    def run_init_mintues5_task(self, start_date: str, end_date: str, max_workers: int = 1, batch_size: int = 50):
         """
         Initializes/Updates 5-minute K-line data with concurrency.
         
@@ -98,4 +98,4 @@ class UpdateTask:
 if __name__ == '__main__':
     task = UpdateTask()
     # Example usage
-    task.run_init_mintues5_task(start_date='2025-12-01', end_date='2026-01-22')
+    task.run_init_mintues5_task(start_date='2025-12-01', end_date='2026-01-28')
