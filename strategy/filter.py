@@ -127,6 +127,10 @@ def apply_increase_filter(df: pd.DataFrame, days: int = 30) -> pd.DataFrame:
 
     return df
 
+def apply_volume_zero_filter(df: pd.DataFrame) -> pd.DataFrame:
+    df['volume'] = pd.to_numeric(df['volume'], errors='coerce')
+    df['volume_filter'] = df['volume'] > 0
+    return df
 
 if __name__ == '__main__':
     # This is a sample usage of the functions in this file

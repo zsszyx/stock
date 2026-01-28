@@ -9,6 +9,7 @@ from sql_op import sql_config
 
 class SqlOp:
     def __init__(self, db_path=sql_config.db_path):
+        print(db_path)
         self.engine = create_engine(db_path)
 
     def save(self, df: pd.DataFrame, table_name: str, index: bool = False):
@@ -122,32 +123,6 @@ class SqlOp:
         query_str = f"SELECT * FROM {table_name} WHERE date >= '{start_date}' AND date <= '{end_date}'"
         return self.query(query_str, parse_dates=['date', 'time'])
 
-    def read_k_data_by_date_range_with_concept(self, table_name: str, start_date: str, end_date: str) -> pd.DataFrame:
-        """
-        读取指定日期范围内的K线数据，并关联概念信息
-        :param table_name: 表名
-        :param start_date: 开始日期
-        :param end_date: 结束日期
-        :return: 包含指定日期范围内K线数据和概念信息的DataFrame
-        """
-        k_data_df = self.read_k_data_by_date_range(table_name, start_date, end_date)
-        if k_data_df is None or k_data_df.empty:
-            return pd.DataFrame()
-
-        concept_df = self.read_concept_constituent()
-        if concept_df is None or concept_df.empty:
-            return k_data_df
-
-        k_data_df['code_no_prefix'] = k_data_df['code'].str[3:]
-        
-        concept_to_merge = concept_df[['code', 'concept', 'concept_code']].rename(columns={'code': 'c_code'})
-
-        merged_df = pd.merge(k_data_df, concept_to_merge, left_on='code_no_prefix', right_on='c_code', how='left')
-
-        merged_df.drop(columns=['code_no_prefix', 'c_code'], inplace=True, errors='ignore')
-
-        return merged_df
-    
     def read_concept_constituent(self):
         """
         读取概念信息
@@ -170,8 +145,8 @@ if __name__ == '__main__':
     sqlop = SqlOp()
 
     # 创建一个示例DataFrame
-    # res = sqlop.read_concept_constituent()
-    # print(res)
-    res = sqlop.read_k_data_by_date_range_with_concept(sql_config.mintues5_table_name, '2025-12-01', '2026-01-01')
+    res = sqlop.read_concept_constituent()
+    print(res)
+    res = sqlop.read_k_data_by_date_range(sql_config.mintues5_table_name, '2026-01-01', '2026-01-26')
     print(res.tail(10))
     print(res.info())

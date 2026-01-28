@@ -6,6 +6,7 @@ import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 print(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from sql_op import op, sql_config
+from strategy.filter import apply_volume_zero_filter
 
 def weighted_kurtosis(values, weights):
     """
@@ -43,6 +44,9 @@ def run_kurtosis_strategy():
         return
 
     # 2. Calculate price and weighted kurtosis for each stock
+    k_data = apply_volume_zero_filter(k_data)
+    k_data = k_data[k_data['volume_filter']]
+    k_data.loc[:, 'amount'] = pd.to_numeric(k_data['amount'], errors='coerce')
     k_data['price'] = k_data['amount'] / k_data['volume']
     
     stock_kurtosis = {}
