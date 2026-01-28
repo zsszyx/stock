@@ -2,26 +2,36 @@ import pandas as pd
 from sqlalchemy import create_engine, text
 import sys
 import os
+
 # Add the root directory to the Python path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-print(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from sql_op import sql_config
 
 class SqlOp:
     def __init__(self, db_path=sql_config.db_path):
-        print(db_path)
         self.engine = create_engine(db_path)
 
     def save(self, df: pd.DataFrame, table_name: str, index: bool = False):
-        df.to_sql(table_name, self.engine, if_exists='replace', index=index)
+        """
+        Replaces the entire table with the dataframe. Use with caution.
+        """
+        with self.engine.begin() as conn:
+            df.to_sql(table_name, conn, if_exists='replace', index=index)
         return df
+
+    def batch_insert(self, df: pd.DataFrame, table_name: str, index: bool = False, chunksize: int = 1000):
+        """
+        Fast insert (append) using multi-value insert.
+        """
+        if df.empty:
+            return
+        with self.engine.begin() as conn:
+            df.to_sql(table_name, conn, if_exists='append', index=index, method='multi', chunksize=chunksize)
 
     def upsert_df_to_db(self, df: pd.DataFrame, table_name: str, index: bool = False):
         """
-        将DataFrame upsert到数据库。如果表不存在，则创建表。
-        :param df: 要保存的DataFrame
-        :param table_name: 数据库中的表名
-        :param index: bool, default False. Write DataFrame index as a column.
+        Upserts DataFrame to database using a temporary table strategy.
+        Target table must exist or it will be created.
         """
         if df.empty:
             return
@@ -29,45 +39,47 @@ class SqlOp:
         temp_table_name = f"temp_{table_name}"
         try:
             with self.engine.connect() as conn:
-                # 检查目标表是否存在
+                # Check if target table exists
                 if not self.engine.dialect.has_table(conn, table_name):
-                    # 如果表不存在，直接将DataFrame写入新表
                     df.to_sql(table_name, self.engine, if_exists='fail', index=index)
                     return
 
-            # 如果表已存在，则执行upsert操作
-            # 将DataFrame写入临时表
-            df.to_sql(temp_table_name, self.engine, if_exists='replace', index=index)
-
+            # Write to temp table
             with self.engine.begin() as conn:
-                # 从临时表获取列名
+                df.to_sql(temp_table_name, conn, if_exists='replace', index=index)
+                
+                # Get columns
                 temp_df_cols = pd.read_sql(f'SELECT * FROM "{temp_table_name}" LIMIT 0', conn).columns.tolist()
                 cols_str = ', '.join(f'"{col}"' for col in temp_df_cols)
 
-                # 构建INSERT OR REPLACE语句
+                # INSERT OR REPLACE
                 insert_sql = f"""
                     INSERT OR REPLACE INTO "{table_name}" ({cols_str})
                     SELECT {cols_str} FROM "{temp_table_name}"
                 """
                 conn.execute(text(insert_sql))
+                
+                # Drop temp table
+                conn.execute(text(f'DROP TABLE IF EXISTS "{temp_table_name}"'))
+                
         except Exception as e:
-            print(f"An error occurred: {e}")
+            print(f"Error in upsert_df_to_db for table {table_name}: {e}")
 
     def get_max_date_for_codes(self, codes: list, table_name: str) -> dict:
         """
-        查询多个股票代码对应的最大日期
-        :param codes: 股票代码列表
-        :param table_name: 表名
-        :return: 一个字典，键是股票代码，值是对应的最大日期
+        Query max date for a list of codes.
         """
         if not codes:
             return {}
 
         try:
-            # 构建参数化的查询
+            # Determine column name for date based on table convention
+            date_col = 'date'
+            
+            # Use a more efficient IN query
             placeholders = ', '.join([f':code_{i}' for i in range(len(codes))])
             query_str = f"""
-                SELECT code, MAX(date) as max_date
+                SELECT code, MAX({date_col}) as max_date
                 FROM {table_name}
                 WHERE code IN ({placeholders})
                 GROUP BY code
@@ -80,18 +92,17 @@ class SqlOp:
             
             return max_dates
         except Exception as e:
-            print(f"An error occurred during query: {e}")
-            return {code: None for code in codes}
+            print(f"Error getting max dates: {e}")
+            return {}
 
     def query(self, query_str: str, parse_dates=None) -> pd.DataFrame:
         """
-        执行一个通用的SQL查询
-        :param query_str: 要执行的SQL查询语句
-        :param parse_dates: 需要解析为日期的列名列表
-        :return: 包含查询结果的DataFrame
+        Execute a generic SQL query.
         """
         try:
-            df = pd.read_sql(query_str, self.engine)
+            with self.engine.connect() as conn:
+                df = pd.read_sql(query_str, conn)
+                
             if parse_dates:
                 for col in parse_dates:
                     if col in df.columns:
@@ -101,52 +112,25 @@ class SqlOp:
                             df[col] = pd.to_datetime(df[col], errors='coerce')
             return df
         except Exception as e:
-            print(f"An error occurred during query: {e}")
+            print(f"Query error: {e}")
             return None
-
-    def read_all_k_data(self, table_name: str) -> pd.DataFrame:
-        """
-        读取所有K线数据
-        :param table_name: 表名
-        :return: 包含所有K线数据的DataFrame
-        """
-        return self.query(f"SELECT * FROM {table_name}", parse_dates=['date', 'time'])
 
     def read_k_data_by_date_range(self, table_name: str, start_date: str, end_date: str) -> pd.DataFrame:
         """
-        读取指定日期范围内的K线数据
-        :param table_name: 表名
-        :param start_date: 开始日期
-        :param end_date: 结束日期
-        :return: 包含指定日期范围内K线数据的DataFrame
+        Read K-line data for a specific date range.
         """
         query_str = f"SELECT * FROM {table_name} WHERE date >= '{start_date}' AND date <= '{end_date}'"
         return self.query(query_str, parse_dates=['date', 'time'])
 
     def read_concept_constituent(self):
-        """
-        读取概念信息
-        :return: 包含概念信息的DataFrame
-        """
-        concept_table_name = sql_config.concept_constituent_ths_table_name
-        query_str = f"SELECT * FROM {concept_table_name}"
+        query_str = f"SELECT * FROM {sql_config.concept_constituent_ths_table_name}"
         return self.query(query_str)
 
     def close(self):
-        """
-        关闭数据库引擎，释放所有连接。
-        """
         if self.engine:
             self.engine.dispose()
 
 if __name__ == '__main__':
-    # 示例用法
-    # 创建一个SqlOp实例
     sqlop = SqlOp()
-
-    # 创建一个示例DataFrame
-    res = sqlop.read_concept_constituent()
-    print(res)
-    res = sqlop.read_k_data_by_date_range(sql_config.mintues5_table_name, '2026-01-01', '2026-01-26')
-    print(res.tail(10))
-    print(res.info())
+    print("SqlOp initialized.")
+    sqlop.close()
