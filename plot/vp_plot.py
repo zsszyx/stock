@@ -145,6 +145,9 @@ def plot_volume_profile(code, start_date, end_date, price_bins=50, save_path=Non
             poc_price = bin_centers[max_vol_idx]
             # Plot POC
             ax1.scatter(x_center, poc_price, color='red', s=15, zorder=10, label='POC' if date == dates[0] else "")
+            # Annotate POC price
+            ax1.text(x_center, poc_price + (y_max - y_min) * 0.01, f"{poc_price:.2f}",
+                     ha='center', va='bottom', fontsize=7, color='red')
             
         # Annotation for Skew/Kurt on Top Subplot (Removed as per user request)
         # if date in daily_stats_map:
@@ -208,4 +211,4 @@ def plot_volume_profile(code, start_date, end_date, price_bins=50, save_path=Non
 
 if __name__ == '__main__':
     # Test
-    plot_volume_profile('002939', '2026-01-14', '2026-01-28')
+    plot_volume_profile('600901', '2026-01-01', '2026-01-28')

@@ -127,9 +127,56 @@ def apply_increase_filter(df: pd.DataFrame, days: int = 30) -> pd.DataFrame:
 
     return df
 
+def apply_pct_chg_filter(df: pd.DataFrame, days: int = 14, threshold: float = 0.05) -> pd.DataFrame:
+    """
+    Filters out stocks that have any daily percentage increase greater than the threshold
+    within the specified recent period.
+
+    Args:
+        df (pd.DataFrame): DataFrame with 'code', 'date', 'close', and optionally 'time'.
+        days (int): Number of days to look back. Default is 14.
+        threshold (float): Percentage change threshold (e.g., 0.05 for 5%).
+
+    Returns:
+        pd.DataFrame: DataFrame with an added 'pct_chg_filter' boolean column.
+    """
+    if 'code' not in df.columns or 'date' not in df.columns or 'close' not in df.columns:
+        raise ValueError("DataFrame must include 'code', 'date', and 'close' columns.")
+
+    df['date'] = pd.to_datetime(df['date'])
+    df['close'] = pd.to_numeric(df['close'], errors='coerce')
+    
+    end_date = df['date'].max()
+    start_date = end_date - pd.Timedelta(days=days)
+    
+    # Filter for recent data
+    recent_df = df[df['date'] >= start_date].copy()
+
+    # Sort to ensure we get the correct last close for each day
+    sort_cols = ['code', 'date']
+    if 'time' in recent_df.columns:
+        sort_cols.append('time')
+    recent_df.sort_values(by=sort_cols, inplace=True)
+
+    # Get daily closes (last close of each day)
+    daily_closes = recent_df.groupby(['code', 'date'])['close'].last().reset_index()
+    
+    # Calculate daily percent change
+    # Sort by code and date to ensure correct pct_change calculation
+    daily_closes.sort_values(by=['code', 'date'], inplace=True)
+    daily_closes['pct_chg'] = daily_closes.groupby('code')['close'].pct_change()
+
+    # Identify stocks that exceeded the threshold on any day
+    filtered_codes = daily_closes[daily_closes['pct_chg'] > threshold]['code'].unique()
+    
+    # Mark filtered stocks
+    df['pct_chg_filter'] = ~df['code'].isin(filtered_codes)
+    
+    return df
+
 def apply_volume_zero_filter(df: pd.DataFrame) -> pd.DataFrame:
-    df['volume'] = pd.to_numeric(df['volume'], errors='coerce')
-    df['volume_filter'] = df['volume'] > 0
+    df.loc[:, 'volume'] = pd.to_numeric(df['volume'], errors='coerce')
+    df.loc[:, 'volume_filter'] = df['volume'] > 0
     return df
 
 if __name__ == '__main__':
