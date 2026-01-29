@@ -211,4 +211,4 @@ def plot_volume_profile(code, start_date, end_date, price_bins=50, save_path=Non
 
 if __name__ == '__main__':
     # Test
-    plot_volume_profile('600901', '2026-01-01', '2026-01-28')
+    plot_volume_profile('600901', '2026-01-01', '2026-01-29')
