@@ -83,10 +83,14 @@ def plot_volume_profile(code, start_date, end_date, price_bins=50, save_path=Non
     
     # Fetch daily stats (Skewness/Kurtosis)
     print("Fetching daily stats...")
+    # Fix date matching: db has datetime, query is string YYYY-MM-DD
+    # Use strftime to normalize comparison
     stats_query = f"""
         SELECT date, weighted_skew, weighted_kurt 
         FROM {sql_config.daily_stats_table_name} 
-        WHERE code = '{code}' AND date >= '{start_date}' AND date <= '{end_date}'
+        WHERE code = '{code}' 
+          AND strftime('%Y-%m-%d', date) >= '{start_date}' 
+          AND strftime('%Y-%m-%d', date) <= '{end_date}'
     """
     stats_df = sql_operator.query(stats_query)
     daily_stats_map = {}
@@ -204,4 +208,4 @@ def plot_volume_profile(code, start_date, end_date, price_bins=50, save_path=Non
 
 if __name__ == '__main__':
     # Test
-    plot_volume_profile('002939', '2026-01-01', '2026-01-22')
+    plot_volume_profile('002939', '2026-01-14', '2026-01-28')

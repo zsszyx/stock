@@ -37,7 +37,8 @@ class UpdateDailyStatsTask:
 
         # 2. Find missing dates in mintues5
         if last_stats_date:
-            date_query = f"SELECT DISTINCT date FROM {sql_config.mintues5_table_name} WHERE date > '{last_stats_date}' ORDER BY date"
+            # Use >= to re-process the last date in case it was partial or updated
+            date_query = f"SELECT DISTINCT date FROM {sql_config.mintues5_table_name} WHERE date >= '{last_stats_date}' ORDER BY date"
         else:
             date_query = f"SELECT DISTINCT date FROM {sql_config.mintues5_table_name} ORDER BY date"
             
