@@ -4,10 +4,10 @@ import pandas as pd
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from tqdm import tqdm
 
-# Add root directory to path
+# Add root directory to path (the 'stock' package directory)
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from bao.bao_interface import BaoInterface
+from data_provider.baostock_provider import BaoInterface
 from sql_op.op import SqlOp
 from sql_op import sql_config
 
@@ -135,4 +135,4 @@ class UpdateTask:
 if __name__ == '__main__':
     task = UpdateTask()
     # Example usage
-    task.run_init_mintues5_task(start_date='2025-12-01', end_date='2026-02-02')
+    task.run_init_mintues5_task(start_date='2025-12-01', end_date='2026-02-03')

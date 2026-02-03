@@ -11,6 +11,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from sql_op.op import SqlOp
 from sql_op import sql_config
+from factors.distribution_analyzer import DistributionAnalyzer
 
 def plot_volume_profile(code, start_date, end_date, price_bins=50, save_path=None):
     """
@@ -81,27 +82,9 @@ def plot_volume_profile(code, start_date, end_date, price_bins=50, save_path=Non
     # Track min/max price for Y-axis scaling
     y_min, y_max = k_data['avg_price'].min(), k_data['avg_price'].max()
     
-    # Fetch daily stats (Skewness/Kurtosis)
-    print("Fetching daily stats...")
-    # Fix date matching: db has datetime, query is string YYYY-MM-DD
-    # Use strftime to normalize comparison
-    stats_query = f"""
-        SELECT date, weighted_skew, weighted_kurt 
-        FROM {sql_config.daily_stats_table_name} 
-        WHERE code = '{code}' 
-          AND strftime('%Y-%m-%d', date) >= '{start_date}' 
-          AND strftime('%Y-%m-%d', date) <= '{end_date}'
-    """
-    stats_df = sql_operator.query(stats_query)
+    # Calculate daily stats (Skewness/Kurtosis/POC) using DistributionAnalyzer
+    print("Calculating daily stats using DistributionAnalyzer...")
     daily_stats_map = {}
-    if stats_df is not None and not stats_df.empty:
-        # Normalize date to string or timestamp for matching
-        stats_df['date'] = pd.to_datetime(stats_df['date'])
-        for _, row in stats_df.iterrows():
-            daily_stats_map[row['date']] = {
-                'skew': row['weighted_skew'],
-                'kurt': row['weighted_kurt']
-            }
     
     # Width of each day's slot (e.g., 0.8 means 80% of the space between days)
     slot_width = 0.8 
@@ -115,8 +98,24 @@ def plot_volume_profile(code, start_date, end_date, price_bins=50, save_path=Non
             
         x_center = date_map[date]
         
-        # Create Histogram
-        # We weigh the histogram by volume
+        # Prepare data for DistributionAnalyzer
+        prices_for_analyzer = (day_data['amount'] / day_data['volume']).tolist()
+        volumes_for_analyzer = day_data['volume'].tolist()
+        
+        analyzer = DistributionAnalyzer(prices_for_analyzer, volumes_for_analyzer, poc_bins=price_bins)
+        
+        if analyzer.is_valid:
+            poc_price = analyzer.poc
+            daily_stats_map[date] = {
+                'poc': poc_price,
+                'skew': analyzer.skewness,
+                'kurt': analyzer.kurtosis
+            }
+        else:
+            poc_price = day_data['avg_price'].iloc[0] if not day_data.empty else 0.0 # Fallback for flat/invalid data
+            daily_stats_map[date] = {'poc': poc_price, 'skew': 0.0, 'kurt': 0.0}
+            
+        # Create Histogram for VP Plot
         hist, bin_edges = np.histogram(
             day_data['avg_price'], 
             bins=price_bins, 
@@ -125,35 +124,23 @@ def plot_volume_profile(code, start_date, end_date, price_bins=50, save_path=Non
         )
         
         # Normalize histogram to fit in the slot_width
-        # Max volume in this day = slot_width
         if hist.max() > 0:
             hist_norm = (hist / hist.max()) * slot_width
         else:
             hist_norm = hist
 
         # Plot bars (horizontal) on Top Subplot (ax1)
-        # bin_edges has size bins+1. We need centers.
         bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
         height = bin_edges[1] - bin_edges[0]
         
         left = x_center - slot_width / 2
         ax1.barh(bin_centers, hist_norm, height=height, left=left, color='skyblue', alpha=0.7, edgecolor='grey', linewidth=0.5)
         
-        # Calculate POC (Point of Control) - Price with max volume
-        if len(hist) > 0:
-            max_vol_idx = np.argmax(hist)
-            poc_price = bin_centers[max_vol_idx]
-            # Plot POC
-            ax1.scatter(x_center, poc_price, color='red', s=15, zorder=10, label='POC' if date == dates[0] else "")
-            # Annotate POC price
-            ax1.text(x_center, poc_price + (y_max - y_min) * 0.01, f"{poc_price:.2f}",
+        # Plot POC
+        ax1.scatter(x_center, poc_price, color='red', s=15, zorder=10, label='POC' if date == dates[0] else "")
+        # Annotate POC price
+        ax1.text(x_center, poc_price + (y_max - y_min) * 0.01, f"{poc_price:.2f}",
                      ha='center', va='bottom', fontsize=7, color='red')
-            
-        # Annotation for Skew/Kurt on Top Subplot (Removed as per user request)
-        # if date in daily_stats_map:
-        #     stats = daily_stats_map[date]
-        #     text_str = f"S:{stats['skew']:.2f}\nK:{stats['kurt']:.2f}"
-        #     ax1.text(x_center, y_max, text_str, ha='center', va='bottom', fontsize=8, color='darkblue')
 
     # Formatting Top Subplot (ax1)
     ax1.set_title(f"Volume Profile by Date for {code} ({start_date} - {end_date})")
