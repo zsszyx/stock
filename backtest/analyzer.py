@@ -198,6 +198,12 @@ class Analyzer:
             else:
                 avg_pl_ratio = float('inf') if avg_win > 0 else 0
 
+        # Calculate Average Holding Period
+        avg_holding_period = 0.0
+        if total_round_trips > 0:
+            durations = [t['duration'].total_seconds() / 86400 for t in round_trips] # Duration in days
+            avg_holding_period = np.mean(durations)
+
         return {
             'Initial Capital': self.broker.initial_cash,
             'Final Equity': equity_series.iloc[-1],
@@ -211,5 +217,6 @@ class Analyzer:
             'Profit Factor': profit_factor,
             'Avg Win': avg_win,
             'Avg Loss': avg_loss,
-            'Avg Win/Loss Ratio': avg_pl_ratio
+            'Avg Win/Loss Ratio': avg_pl_ratio,
+            'Avg Holding Period (Days)': avg_holding_period
         }

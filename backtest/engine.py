@@ -62,5 +62,8 @@ class BacktestEngine:
         print("PERFORMANCE REPORT")
         print("-" * 30)
         for key, value in metrics.items():
-            print(f"{key:<25}: {value:.2f}")
+            if "Days" in key:
+                print(f"{key:<25}: {value:.2f} days")
+            else:
+                print(f"{key:<25}: {value:.2f}")
         print("-" * 30)

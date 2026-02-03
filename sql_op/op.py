@@ -9,7 +9,12 @@ from sql_op import sql_config
 
 class SqlOp:
     def __init__(self, db_path=sql_config.db_path):
-        self.engine = create_engine(db_path)
+        # Increase timeout to 30 seconds to handle concurrent access better
+        self.engine = create_engine(db_path, connect_args={'timeout': 30})
+        # Enable Write-Ahead Logging (WAL) mode for better concurrency
+        with self.engine.connect() as conn:
+            conn.execute(text("PRAGMA journal_mode=WAL;"))
+            conn.execute(text("PRAGMA synchronous=NORMAL;")) # Optional: improves write performance
 
     def save(self, df: pd.DataFrame, table_name: str, index: bool = False):
         """

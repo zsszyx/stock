@@ -27,6 +27,7 @@ class Bar:
     low: float
     close: float
     volume: float
+    amount: float = 0.0
     code: str = ""
 
 @dataclass

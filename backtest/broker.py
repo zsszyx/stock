@@ -62,7 +62,8 @@ class Broker:
                     self._execute_trade(order, execute_price, commission, bar.time)
                     filled_orders.append(order)
                 else:
-                    # Margin/Cash error, reject or keep pending? Let's reject for now.
+                    # Margin/Cash error
+                    print(f"Order REJECTED (Insufficient Funds): Buy {order.code}, Cost {cost:.2f}, Cash {self.cash:.2f}")
                     order.status = OrderStatus.REJECTED
                     filled_orders.append(order)
                     
@@ -73,6 +74,7 @@ class Broker:
                     self._execute_trade(order, execute_price, commission, bar.time)
                     filled_orders.append(order)
                 else:
+                    print(f"Order REJECTED (Insufficient Pos): Sell {order.code}, Qty {order.quantity}, Pos {pos.quantity}")
                     order.status = OrderStatus.REJECTED
                     filled_orders.append(order)
 

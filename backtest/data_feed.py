@@ -34,7 +34,7 @@ class SqliteDataFeed(DataFeed):
         # Construct query carefully to handle multiple codes
         codes_str = "'" + "','".join(codes) + "'"
         query = f"""
-            SELECT code, time, open, high, low, close, volume 
+            SELECT code, time, open, high, low, close, volume, amount 
             FROM {self.table_name}
             WHERE code IN ({codes_str})
             AND date >= '{start_date}' AND date <= '{end_date}'
@@ -50,7 +50,7 @@ class SqliteDataFeed(DataFeed):
             self._data_cache['datetime'] = pd.to_datetime(self._data_cache['time'], format='%Y%m%d%H%M%S%f')
             
             # Ensure numeric types
-            cols = ['open', 'high', 'low', 'close', 'volume']
+            cols = ['open', 'high', 'low', 'close', 'volume', 'amount']
             for col in cols:
                 self._data_cache[col] = pd.to_numeric(self._data_cache[col])
 
@@ -71,6 +71,7 @@ class SqliteDataFeed(DataFeed):
                     low=row['low'],
                     close=row['close'],
                     volume=row['volume'],
+                    amount=row['amount'],
                     code=row['code']
                 )
             yield bars

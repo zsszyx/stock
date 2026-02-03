@@ -71,8 +71,9 @@ class UpdateTask:
             if stock_list is None:
                 raise ValueError("Failed to get stock list")
 
-            # Filter indices
-            stock_list = stock_list[~stock_list['code'].str.contains('sh.000|sz.399')]
+            # Filter: Only Main Board (sh.60, sz.00) and ChiNext (sz.30)
+            # This excludes indices (sh.000, sz.399), STAR market (sh.688), Beijing (bj.8), Funds (51, 15), etc.
+            stock_list = stock_list[stock_list['code'].str.match(r'^(sh\.60|sz\.00|sz\.30)')]
             all_codes = stock_list['code'].tolist()
             print(f"Total stocks to process: {len(all_codes)}")
         
