@@ -100,6 +100,19 @@ class SqlOp:
             print(f"Error getting max dates: {e}")
             return {}
 
+    def execute_non_query(self, query_str: str):
+        """
+        Execute a DML statement (DELETE, INSERT, UPDATE) that does not return rows.
+        Returns the number of rows affected.
+        """
+        try:
+            with self.engine.begin() as conn: # Use begin() for transactional auto-commit/rollback
+                result = conn.execute(text(query_str))
+                return result.rowcount
+        except Exception as e:
+            print(f"Non-query execution error: {e}")
+            return -1
+
     def query(self, query_str: str, parse_dates=None) -> pd.DataFrame:
         """
         Execute a generic SQL query.

@@ -74,6 +74,19 @@ class UpdateTask:
             # Filter: Only Main Board (sh.60, sz.00) and ChiNext (sz.30)
             # This excludes indices (sh.000, sz.399), STAR market (sh.688), Beijing (bj.8), Funds (51, 15), etc.
             stock_list = stock_list[stock_list['code'].str.match(r'^(sh\.60|sz\.00|sz\.30)')]
+            
+            # --- NEW: Filter out 'ST', 'S', 'T', '*ST' stocks ---
+            original_count = len(stock_list)
+            st_t_s_filter = (
+                (stock_list['code_name'].str.contains('ST', case=False, na=False)) |
+                (stock_list['code_name'].str.contains('\\*ST', case=False, na=False)) |
+                (stock_list['code_name'].str.contains('S', case=False, na=False)) |
+                (stock_list['code_name'].str.contains('T', case=False, na=False))
+            )
+            stock_list = stock_list[~st_t_s_filter] # Keep stocks NOT matching the filter
+            print(f"Filtered out {original_count - len(stock_list)} 'ST/S/T/*ST' stocks.")
+            # --- END NEW FILTER ---
+            
             all_codes = stock_list['code'].tolist()
             print(f"Total stocks to process: {len(all_codes)}")
         

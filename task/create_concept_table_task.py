@@ -7,7 +7,7 @@ from tqdm import tqdm
 # Add the root directory to the Python path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from ad.adata_interface import AdataInterface
+from stock.data_provider.adata_provider import AdataInterface
 from sql_op.op import SqlOp
 from sql_op import sql_config
 
