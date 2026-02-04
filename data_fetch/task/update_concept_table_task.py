@@ -8,8 +8,8 @@ from tqdm import tqdm
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from stock.data_provider.adata_provider import AdataInterface
-from sql_op.op import SqlOp
-from sql_op import sql_config
+from sql_server.op import SqlOp
+from sql_server import sql_config
 
 class CreateConceptTableTask:
     def __init__(self):

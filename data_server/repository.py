@@ -1,6 +1,6 @@
 import pandas as pd
-from stock.sql_op.op import SqlOp
-from stock.sql_op import sql_config
+from stock.sql_server.op import SqlOp
+from stock.sql_server import sql_config
 
 class DataRepository:
     """
