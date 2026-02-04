@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 from datetime import datetime
-from stock.context.data_context.context import Minutes5Context, DailyContext
+from stock.data_context.context import Minutes5Context, DailyContext
 
 def test_daily_context():
     # Create mock 5-minute data
