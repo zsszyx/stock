@@ -5,76 +5,60 @@ from datetime import datetime
 from tqdm import tqdm
 
 from stock.screener.base import BaseScreener
-from stock.sql_op.op import SqlOp
-from stock.sql_op import sql_config
+from stock.data.context import MarketContext
 from stock.factors.distribution_analyzer import DistributionAnalyzer
 
 class SingularityScreener(BaseScreener):
     """
-    Implements the Singularity Strategy Selection Logic.
-    Filters: Skew < threshold
-    Ranks: Kurtosis Descending
+    实现奇异点选股逻辑。
+    过滤条件: Skew < threshold
+    排序条件: Kurtosis 降序
     """
     
-    def __init__(self, skew_threshold: float = -0.0, top_n: int = 5):
+    def __init__(self, skew_threshold: float = -0.0, top_n: int = 5, filter_candidates: bool = True):
+        super().__init__(filter_candidates=filter_candidates)
         self.skew_threshold = skew_threshold
         self.top_n = top_n
-        self.sql_op = SqlOp()
         
-    def scan(self, date: datetime, codes: Optional[List[str]] = None) -> pd.DataFrame:
+    def scan(self, context: MarketContext) -> pd.DataFrame:
         """
-        Scans for singularity candidates for the given date.
-        
-        Args:
-            date: The date to scan.
-            codes: Optional list of codes to restrict scan. If None, scans all active.
-            
-        Returns:
-            DataFrame with columns: [code, skew, kurt, poc, close]
+        利用五分钟上下文获取当日数据。
         """
-        date_str = date.strftime('%Y-%m-%d')
+        # 【关键修复】：显式遵循“只计算上一环节存留股票”的逻辑
+        # 如果开启了 filter_candidates，则 codes 为上一环节选出的结果；否则为 None (计算全量)
+        codes = context.candidate_codes if self.filter_candidates else None
         
-        # 1. Determine Universe
-        if codes is None:
-            # Query all codes that have data on this date
-            # Optimization: DISTINCT code from minutes where date = ...
-            query = f"SELECT DISTINCT code FROM {sql_config.mintues5_table_name} WHERE date = '{date_str}'"
-            res = self.sql_op.query(query)
-            if res is None or res.empty:
-                return pd.DataFrame()
-            universe = res['code'].tolist()
-        else:
-            universe = codes
-            
-        # 2. Fetch Data & Calculate Factors
-        results = []
+        # 显式传递 codes 给 get_window，确保内存切片时只包含所需股票
+        daily_df = context.minutes5.get_window(
+            date=context.current_date, 
+            window_days=1, 
+            codes=codes
+        )
         
-        # We can batch query for performance if the universe is small, 
-        # but for simplicity and safety against massive joins, we iterate or use a specialized query.
-        # Let's try to fetch all data for this day in one go (Memory bound, but faster than loop).
-        # Assuming < 5000 stocks * 48 bars = 240k rows. Pandas handles this easily.
-        
-        universe_str = "'" + "','".join(universe) + "'"
-        data_query = f"""
-            SELECT code, close, volume, amount
-            FROM {sql_config.mintues5_table_name}
-            WHERE date = '{date_str}'
-        """
-        # Note: If universe is partial, add AND code IN (...)
-        if codes is not None:
-             data_query += f" AND code IN ({universe_str})"
-             
-        df = self.sql_op.query(data_query)
-        
-        if df is None or df.empty:
+        if daily_df.empty:
             return pd.DataFrame()
             
-        # Ensure numeric
-        cols = ['close', 'volume', 'amount']
-        for c in cols:
-            df[c] = pd.to_numeric(df[c], errors='coerce')
+        # 2. 计算因子 (只针对 daily_df 中的股票)
+        results_df = self._calculate_factors(daily_df)
             
-        # Group by code and calculate
+        if results_df.empty:
+            return pd.DataFrame()
+
+        # 3. 过滤 (Skew)
+        filtered = results_df[results_df['skew'] < self.skew_threshold].copy()
+        
+        # 4. 排序 (Kurt)
+        ranked = filtered.sort_values(by='kurt', ascending=False)
+        
+        # 5. 返回 Top N
+        if self.top_n:
+            return ranked.head(self.top_n)
+        
+        return ranked
+
+    def _calculate_factors(self, df: pd.DataFrame) -> pd.DataFrame:
+        """从原始分钟数据计算统计因子"""
+        results = []
         grouped = df.groupby('code')
         
         for code, group in grouped:
@@ -89,32 +73,12 @@ class SingularityScreener(BaseScreener):
             if not analyzer.is_valid:
                 continue
             
-            poc = analyzer.poc
-            skew = analyzer.skewness
-            kurt = analyzer.kurtosis
+            results.append({
+                'code': code,
+                'skew': analyzer.skewness,
+                'kurt': analyzer.kurtosis,
+                'poc': analyzer.poc,
+                'close': valid_group['close'].iloc[-1]
+            })
             
-            if skew is not None and kurt is not None:
-                results.append({
-                    'code': code,
-                    'skew': skew,
-                    'kurt': kurt,
-                    'poc': poc,
-                    'close': valid_group['close'].iloc[-1]
-                })
-                
-        if not results:
-            return pd.DataFrame()
-            
-        result_df = pd.DataFrame(results)
-        
-        # 3. Filter (Skew)
-        filtered = result_df[result_df['skew'] < self.skew_threshold].copy()
-        
-        # 4. Rank (Kurt)
-        ranked = filtered.sort_values(by='kurt', ascending=False)
-        
-        # 5. Return Top N (or all sorted if N is None)
-        if self.top_n:
-            return ranked.head(self.top_n)
-        
-        return ranked
+        return pd.DataFrame(results)

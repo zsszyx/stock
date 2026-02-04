@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Iterator, List, Dict
+from typing import Iterator, List, Dict, Optional
 import pandas as pd
 from datetime import datetime
 from .models import Bar
@@ -8,16 +8,17 @@ class DataFeed(ABC):
     """Abstract Base Class for Data Feeds"""
     
     @abstractmethod
-    def load_data(self, codes: List[str], start_date: str, end_date: str) -> None:
-        """Pre-fetch or prepare data stream"""
+    def get_full_market_data(self, start_date: str, end_date: str) -> pd.DataFrame:
+        """获取全市场的全量数据（用于 Context）"""
+        pass
+
+    @abstractmethod
+    def set_universe(self, codes: List[str], start_date: str, end_date: str) -> None:
+        """设定回测的具体股票池和范围"""
         pass
 
     @abstractmethod
     def __iter__(self) -> Iterator[Dict[str, Bar]]:
-        """
-        Yields bars for each time step.
-        Returns a dict mapping {code: Bar} for that timestamp.
-        """
         pass
 
 class SqliteDataFeed(DataFeed):
@@ -26,41 +27,57 @@ class SqliteDataFeed(DataFeed):
     def __init__(self, sql_op, table_name: str = "mintues5"):
         self.sql_op = sql_op
         self.table_name = table_name
-        self._data_cache: pd.DataFrame = pd.DataFrame()
-        self._codes = []
+        self._full_cache: pd.DataFrame = pd.DataFrame() # 存放全量数据
+        self._backtest_data: pd.DataFrame = pd.DataFrame() # 存放回测步进数据
 
-    def load_data(self, codes: List[str], start_date: str, end_date: str) -> None:
-        self._codes = codes
-        # Construct query carefully to handle multiple codes
-        codes_str = "'" + "','".join(codes) + "'"
+    def get_full_market_data(self, start_date: str, end_date: str) -> pd.DataFrame:
+        print(f"Loading full market data for context: {start_date} to {end_date}")
         query = f"""
-            SELECT code, time, open, high, low, close, volume, amount 
+            SELECT code, date, time, open, high, low, close, volume, amount 
             FROM {self.table_name}
-            WHERE code IN ({codes_str})
-            AND date >= '{start_date}' AND date <= '{end_date}'
-            ORDER BY time ASC
+            WHERE date >= '{start_date}' AND date <= '{end_date}'
         """
-        # Load all into memory for speed (Pandas is fast), then iterate
-        # For massive datasets, we would implement chunking here.
-        self._data_cache = self.sql_op.query(query)
+        df = self.sql_op.query(query)
+        if df is not None and not df.empty:
+            df['datetime'] = pd.to_datetime(df['time'], format='%Y%m%d%H%M%S%f')
+            for col in ['open', 'high', 'low', 'close', 'volume', 'amount']:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+            self._full_cache = df
+        return self._full_cache
+
+    def set_universe(self, codes: List[str], start_date: str, end_date: str) -> None:
+        """
+        根据确定的 Universe 准备步进迭代的数据。
+        """
+        if not self._full_cache.empty:
+            # 性能优化：如果已经有全量缓存，直接在内存过滤
+            print(f"Filtering universe from memory ({len(codes)} stocks)...")
+            self._backtest_data = self._full_cache[self._full_cache['code'].isin(codes)].copy()
+        else:
+            # 降级：去数据库取
+            print(f"Loading universe from DB ({len(codes)} stocks)...")
+            codes_str = "'" + "','".join(codes) + "'"
+            query = f"""
+                SELECT code, date, time, open, high, low, close, volume, amount 
+                FROM {self.table_name}
+                WHERE code IN ({codes_str})
+                AND date >= '{start_date}' AND date <= '{end_date}'
+            """
+            df = self.sql_op.query(query)
+            if df is not None and not df.empty:
+                df['datetime'] = pd.to_datetime(df['time'], format='%Y%m%d%H%M%S%f')
+                for col in ['open', 'high', 'low', 'close', 'volume', 'amount']:
+                    df[col] = pd.to_numeric(df[col], errors='coerce')
+                self._backtest_data = df
         
-        # Pre-process time
-        if not self._data_cache.empty:
-            # Format: 20251201093500000 -> Datetime
-            self._data_cache['datetime'] = pd.to_datetime(self._data_cache['time'], format='%Y%m%d%H%M%S%f')
-            
-            # Ensure numeric types
-            cols = ['open', 'high', 'low', 'close', 'volume', 'amount']
-            for col in cols:
-                self._data_cache[col] = pd.to_numeric(self._data_cache[col])
+        if not self._backtest_data.empty:
+            self._backtest_data = self._backtest_data.sort_values('datetime')
 
     def __iter__(self) -> Iterator[Dict[str, Bar]]:
-        if self._data_cache.empty:
+        if self._backtest_data.empty:
             return
 
-        # Group by datetime to simulate market time steps
-        grouped = self._data_cache.groupby('datetime')
-        
+        grouped = self._backtest_data.groupby('datetime')
         for timestamp, group in grouped:
             bars = {}
             for _, row in group.iterrows():
