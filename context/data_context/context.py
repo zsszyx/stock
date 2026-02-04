@@ -72,6 +72,11 @@ class DailyContext:
             })
 
         daily = self._min5_data.groupby(['code', 'date']).apply(calc_stats, include_groups=False).reset_index()
+        
+        # Calculate pct_chg: (close - prev_close) / prev_close
+        daily = daily.sort_values(['code', 'date'])
+        daily['pct_chg'] = daily.groupby('code')['close'].pct_change()
+        
         return daily
 
     def get_window(self, date: datetime, window_days: int = 1, codes: Optional[List[str]] = None) -> pd.DataFrame:
