@@ -15,8 +15,8 @@ class SingularityScreener(BaseScreener):
     排序条件: Kurtosis 降序
     """
     
-    def __init__(self, skew_threshold: float = -0.0, top_n: int = 5):
-        super().__init__()
+    def __init__(self, skew_threshold: float = -0.0, top_n: int = 5, filter_candidates: bool = True):
+        super().__init__(filter_candidates=filter_candidates)
         self.skew_threshold = skew_threshold
         self.top_n = top_n
         
@@ -24,9 +24,12 @@ class SingularityScreener(BaseScreener):
         """
         利用五分钟上下文获取当日数据。
         """
+        # 显式遵循“只计算上一环节存留股票”的逻辑
+        codes = context.candidate_codes if self.filter_candidates else None
+
         # 显式声明只需要当日 1 天的数据
         # 使用 context.current_date 确保时间正确
-        daily_df = context.minutes5.get_window(date=context.current_date, window_days=1)
+        daily_df = context.minutes5.get_window(date=context.current_date, window_days=1, codes=codes)
         
         if daily_df.empty:
             return pd.DataFrame()
@@ -40,10 +43,10 @@ class SingularityScreener(BaseScreener):
         # 3. 过滤 (Skew)
         filtered = results_df[results_df['skew'] < self.skew_threshold].copy()
         
-        # 3. 排序 (Kurt)
+        # 4. 排序 (Kurt)
         ranked = filtered.sort_values(by='kurt', ascending=False)
         
-        # 4. 返回 Top N
+        # 5. 返回 Top N
         if self.top_n:
             return ranked.head(self.top_n)
         
@@ -59,10 +62,12 @@ class SingularityScreener(BaseScreener):
             if valid_group.empty:
                 continue
                 
-            prices = (valid_group['amount'] / valid_group['volume']).tolist()
-            volumes = valid_group['volume'].tolist()
+            # 使用统一的工厂方法计算均价分布
+            analyzer = DistributionAnalyzer.from_amount_volume(
+                amounts=valid_group['amount'].values,
+                volumes=valid_group['volume'].values
+            )
             
-            analyzer = DistributionAnalyzer(prices, volumes)
             if not analyzer.is_valid:
                 continue
             

@@ -98,11 +98,12 @@ def plot_volume_profile(code, start_date, end_date, price_bins=50, save_path=Non
             
         x_center = date_map[date]
         
-        # Prepare data for DistributionAnalyzer
-        prices_for_analyzer = (day_data['amount'] / day_data['volume']).tolist()
-        volumes_for_analyzer = day_data['volume'].tolist()
-        
-        analyzer = DistributionAnalyzer(prices_for_analyzer, volumes_for_analyzer, poc_bins=price_bins)
+        # Prepare data for DistributionAnalyzer using unified factory method
+        analyzer = DistributionAnalyzer.from_amount_volume(
+            amounts=day_data['amount'].values,
+            volumes=day_data['volume'].values,
+            poc_bins=price_bins
+        )
         
         if analyzer.is_valid:
             poc_price = analyzer.poc

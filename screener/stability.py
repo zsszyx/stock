@@ -18,7 +18,7 @@ class StabilityScreener(BaseScreener):
         通过分钟级上下文获取窗口数据。
         """
         # 确定需要计算的股票范围
-        codes = context.candidate_codes if self.filter_candidates else None
+        codes = context.candidate_codes
         
         # 使用专用的五分钟上下文接口，获取指定窗口的数据
         df = context.minutes5.get_window(date=context.current_date, 
