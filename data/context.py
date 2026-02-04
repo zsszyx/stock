@@ -28,13 +28,3 @@ class Minutes5Context:
     @property
     def trading_dates(self) -> List[str]:
         return self._all_dates
-
-class MarketContext:
-    """
-    通用的行情上下文容器。
-    策略或选股器通过它访问不同频率的数据。
-    """
-    def __init__(self, minutes5: Optional[Minutes5Context] = None):
-        self.minutes5 = minutes5
-        self.current_date: Optional[datetime] = None
-        self.candidate_codes: Optional[List[str]] = None
