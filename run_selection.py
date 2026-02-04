@@ -1,15 +1,15 @@
 import pandas as pd
 import sqlite3
 from datetime import datetime
-from stock.data_context.context import Minutes5Context, DailyContext
-from stock.selector import (
+from data_context.context import Minutes5Context, DailyContext
+from selector import (
     MaxDailyPctChgSelector, 
     POCNearSelector, 
     NegativeSkewSelector, 
     TopKurtosisSelector
 )
-from stock.sql_op.op import SqlOp
-from stock.sql_op import sql_config
+from sql_op.op import SqlOp
+from sql_op import sql_config
 
 def run_pipeline():
     # 1. Setup Database Connection and fetch data
@@ -80,7 +80,7 @@ def run_pipeline():
 
     # D. Top 5 Kurtosis
     selector_kurt = TopKurtosisSelector(daily_ctx)
-    final_codes = selector_kurt.select(latest_date, candidate_codes=candidate_codes, top_n=5)
+    final_codes = selector_kurt.select(latest_date, candidate_codes=candidate_codes, top_n=10)
     print(f"4. Top 5 Kurtosis: Final {len(final_codes)} stocks selected.")
 
     # 4. Output Results

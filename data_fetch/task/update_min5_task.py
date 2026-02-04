@@ -1,13 +1,19 @@
 import sys
 import os
+
+# Add the project root to sys.path
+# File is at: .../stock/stock/stock/data_fetch/task/update_min5_task.py
+# The 'stock' package is at: .../stock/stock/stock/
+# We need to add the parent: .../stock/stock/
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
 import pandas as pd
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from tqdm import tqdm
 
-# Add root directory to path (the 'stock' package directory)
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
-from data_provider.baostock_provider import BaoInterface
+from data_fetch.data_provider.baostock_provider import BaoInterface
 from sql_op.op import SqlOp
 from sql_op import sql_config
 
@@ -135,4 +141,4 @@ class UpdateTask:
 if __name__ == '__main__':
     task = UpdateTask()
     # Example usage
-    task.run_init_mintues5_task(start_date='2025-12-01', end_date='2026-02-03')
+    task.run_init_mintues5_task(start_date='2025-12-01', end_date='2026-02-04')
