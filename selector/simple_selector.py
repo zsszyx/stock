@@ -55,6 +55,44 @@ class RecentDaysPctChgSelector:
         
         return selected.index.tolist()
 
+class MaxDailyPctChgSelector:
+    """
+    选股器：选择最近 N 日内，每一天的涨跌幅绝对值都不超过指定阈值的股票。
+    """
+    def __init__(self, daily_context: DailyContext):
+        self.context = daily_context
+
+    def select(self, date: datetime, 
+               candidate_codes: Optional[List[str]] = None, 
+               days: int = 5, 
+               threshold: float = 0.05) -> List[str]:
+        """
+        选择以传入日期为准，最近 days 日内每日涨跌幅绝对值最大值不超过 threshold 的股票。
+        
+        Args:
+            date: 目标日期
+            candidate_codes: 候选股票代码列表
+            days: 统计的天数
+            threshold: 每日涨跌幅阈值（绝对值）
+            
+        Returns:
+            符合条件的股票 code 列表
+        """
+        # 获取最近 N 天的数据
+        df = self.context.get_window(date, window_days=days, codes=candidate_codes)
+        
+        if df.empty:
+            return []
+
+        # 计算每只股票最近 N 天涨跌幅绝对值的最大值
+        # 注意：pct_chg 可能包含 NaN（如果数据起始日没有前收盘价），dropna 排除之
+        stats = df.groupby('code')['pct_chg'].apply(lambda x: x.abs().max())
+        
+        # 筛选最大绝对涨跌幅不超过 threshold 的股票
+        selected = stats[stats <= threshold]
+        
+        return selected.index.tolist()
+
 class POCNearSelector:
     """
     选股器：选择收盘价在 POC (Point of Control) 附近的股票（逻辑：close > poc * 0.99）。
@@ -86,3 +124,66 @@ class POCNearSelector:
         selected = df[df['close'] > df['poc'] * (1 - threshold)]
         
         return selected['code'].tolist()
+
+class NegativeSkewSelector:
+    """
+    选股器：选择偏度 (Skewness) 小于 0 的股票。
+    """
+    def __init__(self, daily_context: DailyContext):
+        self.context = daily_context
+
+    def select(self, date: datetime, 
+               candidate_codes: Optional[List[str]] = None) -> List[str]:
+        """
+        选择指定日期偏度小于 0 的股票。
+        
+        Args:
+            date: 目标日期
+            candidate_codes: 候选股票代码列表
+            
+        Returns:
+            符合条件的股票 code 列表
+        """
+        # 获取目标日期的数据
+        df = self.context.get_window(date, window_days=1, codes=candidate_codes)
+        
+        if df.empty:
+            return []
+
+        # 筛选: skew < 0
+        selected = df[df['skew'] < 0]
+        
+        return selected['code'].tolist()
+
+class TopKurtosisSelector:
+    """
+    选股器：选择峰度 (Kurtosis) 最大的前 N 只股票。
+    """
+    def __init__(self, daily_context: DailyContext):
+        self.context = daily_context
+
+    def select(self, date: datetime, 
+               candidate_codes: Optional[List[str]] = None,
+               top_n: int = 5) -> List[str]:
+        """
+        选择指定日期峰度最大的前 N 只股票。
+        
+        Args:
+            date: 目标日期
+            candidate_codes: 候选股票代码列表
+            top_n: 返回的数量
+            
+        Returns:
+            符合条件的股票 code 列表
+        """
+        # 获取目标日期的数据
+        df = self.context.get_window(date, window_days=1, codes=candidate_codes)
+        
+        if df.empty:
+            return []
+
+        # 按峰度降序排列
+        df_sorted = df.sort_values('kurt', ascending=False)
+        
+        # 返回前 N 个
+        return df_sorted.head(top_n)['code'].tolist()
