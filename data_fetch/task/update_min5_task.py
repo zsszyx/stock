@@ -8,8 +8,8 @@ from tqdm import tqdm
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from data_provider.baostock_provider import BaoInterface
-from sql_server.op import SqlOp
-from sql_server import sql_config
+from sql_op.op import SqlOp
+from sql_op import sql_config
 
 # Global instance for worker processes
 worker_bi = None

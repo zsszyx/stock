@@ -9,8 +9,8 @@ from matplotlib.ticker import MaxNLocator
 # Add root to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from sql_server.op import SqlOp
-from sql_server import sql_config
+from sql_op.op import SqlOp
+from sql_op import sql_config
 from factors.distribution_analyzer import DistributionAnalyzer
 
 def plot_volume_profile(code, start_date, end_date, price_bins=50, save_path=None):

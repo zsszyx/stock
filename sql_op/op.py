@@ -5,7 +5,7 @@ import os
 
 # Add the root directory to the Python path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from sql_server import sql_config
+from sql_op import sql_config
 
 class SqlOp:
     def __init__(self, db_path=sql_config.db_path):
