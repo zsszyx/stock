@@ -187,3 +187,170 @@ class TopKurtosisSelector:
         
         # 返回前 N 个
         return df_sorted.head(top_n)['code'].tolist()
+
+class PrevDayNegativeReturnSelector:
+    """
+    选股器：选择前一天涨幅小于 0 的股票。
+    """
+    def __init__(self, daily_context: DailyContext):
+        self.context = daily_context
+
+    def select(self, date: datetime, 
+               candidate_codes: Optional[List[str]] = None) -> List[str]:
+        """
+        选择以传入日期为准，前一个交易日涨幅小于 0 的股票。
+        
+        Args:
+            date: 当前日期
+            candidate_codes: 候选股票代码列表
+            
+        Returns:
+            符合条件的股票 code 列表
+        """
+        # 获取当前日期和前一个交易日的数据
+        # window_days=2 包含了 date 和 date 之前的一个交易日
+        df = self.context.get_window(date, window_days=2, codes=candidate_codes)
+        
+        if df.empty:
+            return []
+
+        # 获取所有日期并排序
+        all_dates = sorted(df['date'].unique())
+        if len(all_dates) < 2:
+            # 数据不足以判断“前一天”
+            return []
+        
+        prev_date = all_dates[-2]
+        
+        # 筛选出前一天的数据
+        prev_df = df[df['date'] == prev_date]
+        
+        # 筛选涨幅小于 0 的股票
+        selected = prev_df[prev_df['pct_chg'] < 0]
+        
+        return selected['code'].tolist()
+
+class PrevDayAmplitudeSelector:
+    """
+    选股器：选择前一天振幅不超过指定阈值（默认 3%）的股票。
+    """
+    def __init__(self, daily_context: DailyContext):
+        self.context = daily_context
+
+    def select(self, date: datetime, 
+               candidate_codes: Optional[List[str]] = None,
+               threshold: float = 0.03) -> List[str]:
+        """
+        选择前一交易日振幅 <= threshold 的股票。
+        
+        Args:
+            date: 当前日期
+            candidate_codes: 候选列表
+            threshold: 振幅阈值
+            
+        Returns:
+            符合条件的股票 code 列表
+        """
+        # 获取当前日期和前一个交易日的数据
+        df = self.context.get_window(date, window_days=2, codes=candidate_codes)
+        
+        if df.empty:
+            return []
+
+        all_dates = sorted(df['date'].unique())
+        if len(all_dates) < 2:
+            return []
+        
+        prev_date = all_dates[-2]
+        prev_df = df[df['date'] == prev_date]
+        
+        # 筛选振幅 <= threshold 的股票
+        # 排除 amplitude 为 NaN 的情况
+        selected = prev_df[prev_df['amplitude'] <= threshold]
+        
+        return selected['code'].tolist()
+
+class AfternoonStrongSelector:
+    """
+    选股器：选择下午均价大于上午均价一定比例（默认 0.5%）的股票。
+    """
+    def __init__(self, daily_context: DailyContext):
+        self.context = daily_context
+
+    def select(self, date: datetime, 
+               candidate_codes: Optional[List[str]] = None,
+               threshold: float = 0.005) -> List[str]:
+        """
+        选择指定日期下午均价大于上午均价的股票。
+        
+        Args:
+            date: 目标日期
+            candidate_codes: 候选股票代码列表
+            threshold: 比例阈值，默认 0.005 (0.5%)
+            
+        Returns:
+            符合条件的股票 code 列表
+        """
+        # 获取目标日期的数据
+        df = self.context.get_window(date, window_days=1, codes=candidate_codes)
+        
+        if df.empty:
+            return []
+
+        # 筛选: afternoon_mean > morning_mean * (1 + threshold)
+        # 排除 morning_mean 为 0 的情况
+        mask = (df['morning_mean'] > 0)
+        selected = df[mask & (df['afternoon_mean'] > df['morning_mean'] * (1 + threshold))]
+        
+        return selected['code'].tolist()
+
+class VReversalSelector:
+    """
+    选股器：选择当日呈现 V 型反转走势的股票。
+    逻辑：从开盘到最低点跌幅超过 threshold_drop，从最低点到收盘回升超过 threshold_recover。
+    """
+    def __init__(self, daily_context: DailyContext):
+        self.context = daily_context
+
+    def select(self, date: datetime, 
+               candidate_codes: Optional[List[str]] = None,
+               threshold_drop: float = 0.02,
+               threshold_recover: float = 0.02) -> List[str]:
+        """
+        Args:
+            date: 目标日期
+            candidate_codes: 候选股票代码列表
+            threshold_drop: 下跌幅度阈值 (open -> min)
+            threshold_recover: 回升幅度阈值 (min -> close)
+            
+        Returns:
+            符合条件的股票 code 列表
+        """
+        df = self.context.get_window(date, window_days=1, codes=candidate_codes)
+        if df.empty:
+            return []
+
+        # 计算跌幅和回升幅
+        # 排除 open 为 0 或 min 为 0 的情况
+        df = df[(df['open'] > 0) & (df['min'] > 0)].copy()
+        
+        df['drop_ratio'] = (df['open'] - df['min']) / df['open']
+        df['recover_ratio'] = (df['close'] - df['min']) / df['min']
+        
+        # 触底时间过滤：最低点应在 10:00 到 14:30 之间 (假设 YYYYMMDDHHMMSSmmm 格式)
+        # HHMM 在 index 8:12
+        def is_valid_time(t_str):
+            if not t_str or len(t_str) < 12: return False
+            hhmm = t_str[8:12]
+            return '1000' <= hhmm <= '1430'
+
+        df['valid_time'] = df['min_time'].apply(is_valid_time)
+
+        # 筛选
+        mask = (df['drop_ratio'] >= threshold_drop) & \
+               (df['recover_ratio'] >= threshold_recover) & \
+               (df['valid_time'])
+        
+        selected = df[mask]
+        
+        return selected['code'].tolist()

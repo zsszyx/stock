@@ -6,7 +6,11 @@ from selector import (
     MaxDailyPctChgSelector, 
     POCNearSelector, 
     NegativeSkewSelector, 
-    TopKurtosisSelector
+    TopKurtosisSelector,
+    AfternoonStrongSelector,
+    VReversalSelector,
+    PrevDayNegativeReturnSelector,
+    PrevDayAmplitudeSelector
 )
 from sql_op.op import SqlOp
 from sql_op import sql_config
@@ -14,9 +18,8 @@ from sql_op import sql_config
 def run_pipeline():
     # 1. Setup Database Connection and fetch data
     sql_op = SqlOp()
-    
-    # Get the latest date from the database
     db_file_path = sql_config.db_path.replace("sqlite:///", "")
+    
     with sqlite3.connect(db_file_path) as conn:
         cursor = conn.cursor()
         cursor.execute(f"SELECT MAX(date) FROM {sql_config.mintues5_table_name}")
@@ -48,50 +51,83 @@ def run_pipeline():
     min5_ctx = Minutes5Context(df)
     daily_ctx = DailyContext(min5_ctx)
     
-    # 3. Chain Selection Logic
+    # 3. Selection Pipeline
     print("\n--- Starting Selection Pipeline ---")
     
-    # A. Max Daily Pct Change in recent 5 Days <= 5%
-    selector_vol = MaxDailyPctChgSelector(daily_ctx)
-    candidate_codes = selector_vol.select(latest_date, days=5, threshold=0.05)
-    print(f"1. Max Daily PctChg in 5D <= 5%: {len(candidate_codes)} stocks found.")
-    
-    if not candidate_codes:
-        print("No stocks passed the first filter.")
-        return
-
-    # B. Close > POC * 0.99
-    selector_poc = POCNearSelector(daily_ctx)
-    candidate_codes = selector_poc.select(latest_date, candidate_codes=candidate_codes, threshold=0.01)
-    print(f"2. Close > POC * 0.99: {len(candidate_codes)} stocks remaining.")
+    # A. Previous Day Amplitude Selection (<= 3%)
+    amp_selector = PrevDayAmplitudeSelector(daily_ctx)
+    candidate_codes = amp_selector.select(latest_date, threshold=0.03)
+    print(f"1. Previous Day Amplitude <= 3%: {len(candidate_codes)} stocks found.")
 
     if not candidate_codes:
-        print("No stocks passed the second filter.")
+        print("No stocks passed the Amplitude filter.")
         return
 
-    # C. Negative Skew (skew < 0)
-    selector_skew = NegativeSkewSelector(daily_ctx)
-    candidate_codes = selector_skew.select(latest_date, candidate_codes=candidate_codes)
-    print(f"3. Negative Skew: {len(candidate_codes)} stocks remaining.")
+    # B. Max Daily Pct Change in recent 5 Days <= 5%
+    # This ensures no single day in the last week had a move > 5% or < -5%
+    vol_selector = MaxDailyPctChgSelector(daily_ctx)
+    candidate_codes = vol_selector.select(latest_date, candidate_codes=candidate_codes, days=5, threshold=0.05)
+    print(f"2. Max Daily PctChg in 5D <= 5%: {len(candidate_codes)} stocks remaining.")
 
     if not candidate_codes:
-        print("No stocks passed the third filter.")
+        print("No stocks passed the MaxDailyPctChg filter.")
         return
 
-    # D. Top 5 Kurtosis
-    selector_kurt = TopKurtosisSelector(daily_ctx)
-    final_codes = selector_kurt.select(latest_date, candidate_codes=candidate_codes, top_n=10)
-    print(f"4. Top 5 Kurtosis: Final {len(final_codes)} stocks selected.")
+    # C. V-Reversal Selection
+    v_selector = VReversalSelector(daily_ctx)
+    candidate_codes = v_selector.select(latest_date, candidate_codes=candidate_codes, threshold_drop=0.015, threshold_recover=0.015)
+    print(f"3. V-Reversal Selected: {len(candidate_codes)} stocks remaining.")
+
+    if not candidate_codes:
+        print("No stocks passed the V-Reversal filter.")
+        return
+
+    # D. Negative Skew Selection (skew < 0)
+    skew_selector = NegativeSkewSelector(daily_ctx)
+    candidate_codes = skew_selector.select(latest_date, candidate_codes=candidate_codes)
+    print(f"4. Negative Skew (skew < 0): {len(candidate_codes)} stocks remaining.")
+
+    if not candidate_codes:
+        print("No stocks passed the Negative Skew filter.")
+        return
+
+    # E. POC Near Selection (close > poc * 0.99)
+    poc_selector = POCNearSelector(daily_ctx)
+    candidate_codes = poc_selector.select(latest_date, candidate_codes=candidate_codes, threshold=0.01)
+    print(f"5. Close > POC * 0.99: {len(candidate_codes)} stocks remaining.")
+
+    if not candidate_codes:
+        print("No stocks passed the POC filter.")
+        return
+
+    # F. Top 10 Kurtosis Selection
+    kurt_selector = TopKurtosisSelector(daily_ctx)
+    final_codes = kurt_selector.select(latest_date, candidate_codes=candidate_codes, top_n=10)
+    print(f"6. Top 10 Kurtosis: Final {len(final_codes)} stocks selected.")
 
     # 4. Output Results
     if final_codes:
-        print("\nSelected Stocks:")
-        final_df = daily_ctx.data[
+        res_df = daily_ctx.data[
             (daily_ctx.data['code'].isin(final_codes)) & 
             (daily_ctx.data['date'] == latest_date_str)
-        ].sort_values('kurt', ascending=False)
+        ].copy()
         
-        print(final_df[['code', 'date', 'close', 'poc', 'skew', 'kurt', 'pct_chg']])
+        # Calculate details for display
+        res_df['drop_%'] = (res_df['open'] - res_df['min']) / res_df['open'] * 100
+        res_df['recover_%'] = (res_df['close'] - res_df['min']) / res_df['min'] * 100
+        
+        # Fetch previous day data for amplitude display
+        prev_date_str = sorted(daily_ctx.data['date'].unique())[-2]
+        prev_df = daily_ctx.data[
+            (daily_ctx.data['code'].isin(final_codes)) & 
+            (daily_ctx.data['date'] == prev_date_str)
+        ][['code', 'amplitude']]
+        prev_df.columns = ['code', 'prev_amp']
+        
+        res_df = res_df.merge(prev_df, on='code')
+        
+        print("\nSelected Stocks Details:")
+        print(res_df[['code', 'open', 'min', 'close', 'min_time', 'skew', 'prev_amp', 'drop_%', 'recover_%']].head(20))
     else:
         print("\nNo stocks matched all criteria.")
 

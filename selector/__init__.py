@@ -1,1 +1,1 @@
-from .simple_selector import RecentDaysPctChgSelector, MaxDailyPctChgSelector, POCNearSelector, NegativeSkewSelector, TopKurtosisSelector
+from .simple_selector import RecentDaysPctChgSelector, MaxDailyPctChgSelector, POCNearSelector, NegativeSkewSelector, TopKurtosisSelector, AfternoonStrongSelector, VReversalSelector, PrevDayNegativeReturnSelector, PrevDayAmplitudeSelector

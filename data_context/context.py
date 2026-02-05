@@ -54,13 +54,11 @@ class DailyContext:
         def calc_stats(group):
             analyzer = DistributionAnalyzer.from_amount_volume(
                 amounts=group['amount'].values,
-                volumes=group['volume'].values
+                volumes=group['volume'].values,
+                times=group['time'].values
             )
             
             # Last close price of the day
-            # Assuming data is sorted by time, if not we should sort it
-            # In Minutes5Context we don't guarantee sort but usually it is.
-            # Let's sort by time just in case
             sorted_group = group.sort_values('time')
             last_close = sorted_group['close'].iloc[-1]
             
@@ -68,6 +66,12 @@ class DailyContext:
                 'skew': analyzer.skewness,
                 'kurt': analyzer.kurtosis,
                 'poc': analyzer.poc,
+                'morning_mean': analyzer.morning_mean_price,
+                'afternoon_mean': analyzer.afternoon_mean_price,
+                'open': analyzer.open_price,
+                'high': analyzer.max_price,
+                'min': analyzer.min_price,
+                'min_time': analyzer.min_time,
                 'close': last_close
             })
 
@@ -75,7 +79,12 @@ class DailyContext:
         
         # Calculate pct_chg: (close - prev_close) / prev_close
         daily = daily.sort_values(['code', 'date'])
-        daily['pct_chg'] = daily.groupby('code')['close'].pct_change()
+        daily['prev_close'] = daily.groupby('code')['close'].shift(1)
+        daily['pct_chg'] = (daily['close'] - daily['prev_close']) / daily['prev_close']
+        
+        # Calculate amplitude: (high - low) / prev_close
+        # low is stored in 'min' column from previous implementation
+        daily['amplitude'] = (daily['high'] - daily['min']) / daily['prev_close']
         
         return daily
 
