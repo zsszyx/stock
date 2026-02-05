@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 from typing import List, Optional
 from datetime import datetime
-from factors.distribution_analyzer import DistributionAnalyzer
+from stock.factors.distribution_analyzer import DistributionAnalyzer
 
 class Minutes5Context:
     """
