@@ -1,7 +1,7 @@
 import pandas as pd
 import sqlite3
 from typing import List, Dict, Set
-from stock.sql_op import sql_config
+from sql_op import sql_config
 
 class ConceptContext:
     """

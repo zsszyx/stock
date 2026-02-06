@@ -1,8 +1,8 @@
 import pandas as pd
 import sqlite3
 from datetime import datetime
-from stock.data_context import Minutes5Context, DailyContext, ConceptContext
-from stock.sql_op import sql_config
+from data_context import Minutes5Context, DailyContext, ConceptContext
+from sql_op import sql_config
 
 def run_concept_analysis():
     # 1. Setup Database and fetch data

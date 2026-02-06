@@ -1,8 +1,8 @@
 import pandas as pd
 import sqlite3
 from datetime import datetime
-from stock.data_context import Minutes5Context, DailyContext, ConceptContext
-from stock.sql_op import sql_config
+from data_context import Minutes5Context, DailyContext, ConceptContext
+from sql_op import sql_config
 
 def test_repetition():
     # 1. Setup
