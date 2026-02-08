@@ -151,5 +151,4 @@ class UpdateTask:
 if __name__ == '__main__':
     task = UpdateTask()
     # Example usage: now supports adjustflag='2' for forward adjustment if desired
-    task.run_init_mintues5_task(start_date='2025-063'
-    '-01', end_date='2026-02-08')
+    task.run_init_mintues5_task(start_date='2025-06-01', end_date='2026-02-08')
