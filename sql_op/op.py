@@ -100,6 +100,33 @@ class SqlOp:
             print(f"Error getting max dates: {e}")
             return {}
 
+    def get_min_date_for_codes(self, codes: list, table_name: str) -> dict:
+        """
+        Query min date for a list of codes.
+        """
+        if not codes:
+            return {}
+
+        try:
+            date_col = 'date'
+            placeholders = ', '.join([f':code_{i}' for i in range(len(codes))])
+            query_str = f"""
+                SELECT code, MIN({date_col}) as min_date
+                FROM {table_name}
+                WHERE code IN ({placeholders})
+                GROUP BY code
+            """
+            params = {f'code_{i}': code for i, code in enumerate(codes)}
+            
+            with self.engine.connect() as connection:
+                result = connection.execute(text(query_str), params)
+                min_dates = {row[0]: row[1] for row in result}
+            
+            return min_dates
+        except Exception as e:
+            print(f"Error getting min dates: {e}")
+            return {}
+
     def execute_non_query(self, query_str: str):
         """
         Execute a DML statement (DELETE, INSERT, UPDATE) that does not return rows.

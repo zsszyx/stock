@@ -54,15 +54,16 @@ class BaoInterface:
         result = pd.DataFrame(data_list, columns=rs.fields)
         return result
 
-    def get_k_data_5min(self, code: str, start_date: str, end_date: str) -> pd.DataFrame:
+    def get_k_data_5min(self, code: str, start_date: str, end_date: str, adjustflag: str = "3") -> pd.DataFrame:
         """
         获取5分钟K线数据
+        adjustflag：复权类型，默认不复权：3；1：后复权；2：前复权。
         """
         fields = "date,time,code,open,high,low,close,volume,amount,adjustflag"
         rs = bs.query_history_k_data_plus(code,
             fields,
             start_date=start_date, end_date=end_date,
-            frequency="5", adjustflag="3")
+            frequency="5", adjustflag=adjustflag)
         
         if rs.error_code != '0':
             print(f'query_history_k_data_plus respond error_code:{rs.error_code}')
