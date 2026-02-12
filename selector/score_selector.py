@@ -46,7 +46,7 @@ class KSPScoreSelector:
         base_magnitude = df['kurt'].abs() * df['skew'].abs()
         
         # PctChg is only multiplied as a penalty term when abs(PctChg) > 0.05
-        magnitude = np.where(df['pct_chg'].abs() > 0.05, 
+        magnitude = np.where(df['pct_chg'].abs() > 0.03, 
                              base_magnitude * df['pct_chg'].abs() * 100, 
                              base_magnitude)
         
@@ -58,7 +58,7 @@ class KSPScoreSelector:
         # 4. poc < prev_close * 0.98 (POC is > 2% lower than previous day's close)
         is_bad = (df['kurt'] < 0) | \
                  (df['skew'] > 0) | \
-                 (df['pct_chg'].abs() > 0.05) | \
+                 (df['pct_chg'].abs() > 0.03) | \
                  (df['poc'] < df['prev_close'] * 0.98)
         
         # Apply sign
