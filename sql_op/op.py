@@ -2,6 +2,7 @@ import pandas as pd
 from sqlalchemy import create_engine, text
 import sys
 import os
+from typing import Optional
 
 # Add the root directory to the Python path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -140,13 +141,16 @@ class SqlOp:
             print(f"Non-query execution error: {e}")
             return -1
 
-    def query(self, query_str: str, parse_dates=None) -> pd.DataFrame:
+    def query(self, query_str: str, params: Optional[dict] = None, parse_dates=None) -> pd.DataFrame:
         """
         Execute a generic SQL query.
         """
         try:
             with self.engine.connect() as conn:
-                df = pd.read_sql(query_str, conn)
+                if params:
+                    df = pd.read_sql(text(query_str), conn, params=params)
+                else:
+                    df = pd.read_sql(query_str, conn)
                 
             if parse_dates:
                 for col in parse_dates:
@@ -160,15 +164,13 @@ class SqlOp:
             print(f"Query error: {e}")
             return None
 
-    def read_k_data_by_date_range(self, table_name: str, start_date: str, end_date: str) -> pd.DataFrame:
+    def read_table(self, table_name: str, filters: Optional[str] = None) -> pd.DataFrame:
         """
-        Read K-line data for a specific date range.
+        Generic table reader.
         """
-        query_str = f"SELECT * FROM {table_name} WHERE date >= '{start_date}' AND date <= '{end_date}'"
-        return self.query(query_str, parse_dates=['date', 'time'])
-
-    def read_concept_constituent(self):
-        query_str = f"SELECT * FROM {sql_config.concept_constituent_ths_table_name}"
+        query_str = f"SELECT * FROM {table_name}"
+        if filters:
+            query_str += f" WHERE {filters}"
         return self.query(query_str)
 
     def close(self):

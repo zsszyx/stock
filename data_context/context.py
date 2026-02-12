@@ -42,11 +42,17 @@ class Minutes5Context:
 
 class DailyContext:
     """
-    日线上下文，由五分钟数据聚合而成。
+    日线上下文，由五分钟数据聚合而成，或直接从预计算的日线数据加载。
     """
-    def __init__(self, min5_context: Minutes5Context):
-        self._min5_data = min5_context.data
-        self._daily_df = self._aggregate_to_daily()
+    def __init__(self, min5_context: Optional[Minutes5Context] = None, daily_df: Optional[pd.DataFrame] = None):
+        if daily_df is not None:
+            self._daily_df = daily_df.copy()
+        elif min5_context is not None:
+            self._min5_data = min5_context.data
+            self._daily_df = self._aggregate_to_daily()
+        else:
+            raise ValueError("Either min5_context or daily_df must be provided")
+            
         self._all_dates = sorted(self._daily_df['date'].unique())
         self._date_to_idx = {d: i for i, d in enumerate(self._all_dates)}
 

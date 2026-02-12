@@ -4,7 +4,9 @@ from typing import List, Optional, Dict
 from datetime import datetime
 from data_context.context import DailyContext
 
-class KSPScoreSelector:
+from selector.base_selector import BaseSelector
+
+class KSPScoreSelector(BaseSelector):
     """
     Score Magnitude:
     1. If abs(PctChg) > 0.05: abs(Kurtosis) * abs(Skewness) * abs(PctChg)
@@ -19,8 +21,6 @@ class KSPScoreSelector:
     If any of the above is true, the score is negative.
     Otherwise, it is positive.
     """
-    def __init__(self, daily_context: DailyContext):
-        self.context = daily_context
 
     def get_scores(self, date: datetime, candidate_codes: Optional[List[str]] = None) -> pd.DataFrame:
         """
@@ -28,7 +28,7 @@ class KSPScoreSelector:
         Returns a DataFrame with columns: ['code', 'score', 'kurt', 'skew', 'pct_chg']
         """
         # Get data for the specific date
-        df = self.context.get_window(date, window_days=1, codes=candidate_codes)
+        df = self.get_data(date, window_days=1, candidate_codes=candidate_codes)
         
         if df.empty:
             return pd.DataFrame()
