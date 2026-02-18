@@ -77,6 +77,28 @@ class BaoInterface:
         result = pd.DataFrame(data_list, columns=rs.fields)
         return result
 
+    def get_k_data_daily(self, code: str, start_date: str, end_date: str, adjustflag: str = "3") -> pd.DataFrame:
+        """
+        获取日线K线数据
+        """
+        fields = "date,code,open,high,low,close,volume,amount,turn"
+        rs = bs.query_history_k_data_plus(code,
+            fields,
+            start_date=start_date, end_date=end_date,
+            frequency="d", adjustflag=adjustflag)
+        
+        if rs.error_code != '0':
+            print(f'query_history_k_data_plus respond error_code:{rs.error_code}')
+            print(f'query_history_k_data_plus respond  error_msg:{rs.error_msg}')
+            return None
+
+        data_list = []
+        while (rs.error_code == '0') & rs.next():
+            data_list.append(rs.get_row_data())
+        
+        result = pd.DataFrame(data_list, columns=rs.fields)
+        return result
+
 if __name__ == '__main__':
     with BaoInterface() as bi:
         # dates = bi.get_trade_dates(start_date="2024-01-01", end_date="2024-03-31")

@@ -1,15 +1,20 @@
 import pandas as pd
-import sqlite3
-from typing import List, Dict, Set
-from sql_op import sql_config
+from typing import List, Dict, Set, Optional
+from stock.database.base import BaseRepository
+from stock.config import settings
 
 class ConceptContext:
     """
     股票概念上下文，建立股票与概念的双向索引。
+    数据现在默认从 ClickHouse 读取。
     """
-    def __init__(self, df: pd.DataFrame = None):
+    def __init__(self, df: pd.DataFrame = None, repo: Optional[BaseRepository] = None):
         if df is None:
-            self._df = self._load_from_db()
+            if repo is None:
+                # Default to ClickHouse now
+                from stock.database.factory import RepositoryFactory
+                repo = RepositoryFactory.get_clickhouse_repo()
+            self._df = self._load_from_repo(repo)
         else:
             self._df = df
             
@@ -17,19 +22,20 @@ class ConceptContext:
         self._concept_to_stocks: Dict[str, Set[str]] = {}
         self._build_indexes()
 
-    def _load_from_db(self) -> pd.DataFrame:
-        db_file_path = sql_config.db_path.replace("sqlite:///", "")
-        query = f"SELECT code, concept FROM {sql_config.concept_constituent_ths_table_name}"
-        with sqlite3.connect(db_file_path) as conn:
-            df = pd.read_sql_query(query, conn)
+    def _load_from_repo(self, repo: BaseRepository) -> pd.DataFrame:
+        query = f"SELECT code, concept FROM {settings.TABLE_CONCEPT_CONSTITUENT_THS}"
+        df = repo.query(query)
+        
+        if not df.empty:
             # Add sh./sz. prefix to match Baostock format
             def add_prefix(code):
-                if code.startswith('6'):
-                    return 'sh.' + code
+                s_code = str(code)
+                if s_code.startswith('6'):
+                    return 'sh.' + s_code
                 else:
-                    return 'sz.' + code
+                    return 'sz.' + s_code
             df['code'] = df['code'].apply(add_prefix)
-            return df
+        return df
 
     def _build_indexes(self):
         for _, row in self._df.iterrows():

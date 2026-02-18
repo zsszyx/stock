@@ -25,7 +25,7 @@ class DistributionAnalyzer:
         return self.prices
 
     @property
-    def morning_mean_price(self):
+    def morning_mean(self):
         if not self._is_valid or self.times is None:
             return 0.0
         # Time format is YYYYMMDDHHMMSSmmm, HH starts at index 8
@@ -37,7 +37,7 @@ class DistributionAnalyzer:
         return np.average(m_prices, weights=m_vols)
 
     @property
-    def afternoon_mean_price(self):
+    def afternoon_mean(self):
         if not self._is_valid or self.times is None:
             return 0.0
         # Time format is YYYYMMDDHHMMSSmmm, HH starts at index 8
@@ -49,19 +49,19 @@ class DistributionAnalyzer:
         return np.average(a_prices, weights=a_vols)
 
     @property
-    def open_price(self):
+    def open(self):
         if not self._is_valid:
             return 0.0
         return self.real_price[0]
 
     @property
-    def max_price(self):
+    def high(self):
         if not self._is_valid:
             return 0.0
         return np.max(self.real_price)
 
     @property
-    def min_price(self):
+    def low(self):
         if not self._is_valid:
             return 0.0
         return np.min(self.real_price)
