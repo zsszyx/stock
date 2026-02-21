@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stock-system"
+version = "0.1.0"
+description = "Professional Stock Analysis and Backtesting System"
+requires-python = ">=3.9"
+dependencies = [
+    "pandas",
+    "numpy",
+    "sqlalchemy",
+    "clickhouse-connect",
+    "python-dotenv",
+    "pydantic-settings",
+    "scipy",
+    "matplotlib"
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["stock*"]
