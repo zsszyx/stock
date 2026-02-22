@@ -21,7 +21,7 @@ class KSPStrategy(bt.Strategy):
         self.trade_records = []
         self.daily_records = []
         self.trade_costs = {}
-        self.pending_orders = {}
+        self.to_sell_queue = {} # 记录待卖出的标的及其原因: {code: reason}
         
         if self.p.core_strategy is None:
             raise ValueError("Must provide 'core_strategy' parameter (instance of BaseStrategy)")
@@ -32,65 +32,76 @@ class KSPStrategy(bt.Strategy):
         dt_datetime = datetime.combine(dt, datetime.min.time())
         core = self.p.core_strategy
         
-        # 1. 准备当日排名上下文
-        rank_map = {}
-        for d in self.datas:
-            if hasattr(d, 'ksp_sum_5d_rank'):
-                rank_map[d._name] = d.ksp_sum_5d_rank[0]
+        # 1. 准备排名上下文
+        rank_map = {d._name: d.ksp_sum_5d_rank[0] for d in self.datas if hasattr(d, 'ksp_sum_5d_rank')}
+        sold_today = set() # 记录今日已决定卖出的股票，防止当日重买
 
-        # 2. 获取当日买入信号
-        target_codes = core.select_targets(dt_datetime, {'rank_map': rank_map})
-        target_codes = target_codes if target_codes else []
-        sold_today = set()
-
-        # 3. 严格执行退出逻辑 (移除持有保护，达标即卖)
-        for code in list(self.trade_costs.keys()):
+        # 2. 处理待卖出队列 (执行前一日的决策)
+        for code in list(self.to_sell_queue.keys()):
             data = self.getdatabyname(code)
-            if data is None: continue
+            if data is None:
+                del self.to_sell_queue[code]
+                continue
+            
+            # 涨跌停检查：如果今日开盘即跌停，则无法卖出
+            if len(data) > 1 and data.open[0] <= data.close[-1] * 0.905:
+                continue
+            
+            # 可以卖出
+            pos = self.getposition(data)
+            if pos.size > 0:
+                buy_price = self.trade_costs[code]['avg_cost']
+                reason = self.to_sell_queue[code]
+                self.close(data=data)
+                self.trade_records.append({
+                    'date': dt_str, 'action': 'SELL_SIGNAL', 'code': code,
+                    'price': float(data.open[0]), 'size': int(pos.size),
+                    'profit_pct': float((data.open[0] - buy_price) / buy_price),
+                    'reason': reason,
+                })
+                del self.trade_costs[code]
+                sold_today.add(code) # 标记为已卖出
+            del self.to_sell_queue[code]
+
+        # 3. 产生新的卖出决策 (为明日准备)
+        for code in list(self.trade_costs.keys()):
+            if code in self.to_sell_queue: continue
+            
+            data = self.getdatabyname(code)
             pos = self.getposition(data)
             if pos.size <= 0: continue
             
             buy_price = self.trade_costs[code]['avg_cost']
             current_close = data.close[0]
+            context = {'rank': rank_map.get(code), 'open': data.open[0], 'close': data.close[0]}
             
-            context = {
-                'rank': rank_map.get(code),
-                'open': data.open[0],
-                'close': data.close[0]
-            }
-            
-            # 决策：是否满足任意退出条件？
             exit_reason = core.should_exit(code, buy_price, current_close, dt_datetime, context)
-            
             if exit_reason:
-                # 达标即平仓，空出槽位给更强的标的
-                self.close(data=data)
-                self.trade_records.append({
-                    'date': dt_str, 'action': 'SELL_SIGNAL', 'code': code,
-                    'price': float(data.close[0]), 'size': int(pos.size),
-                    'profit_pct': float((data.close[0] - buy_price) / buy_price),
-                    'reason': exit_reason,
-                })
-                del self.trade_costs[code]
-                sold_today.add(code) # 拦截当日重买
+                self.to_sell_queue[code] = exit_reason
 
-        # 4. 买入决策 (新鲜血液轮动)
-        position_count = len([c for c, cost in self.trade_costs.items() 
-                             if self.getposition(self.getdatabyname(c)).size > 0])
-        
+        # 4. 买入决策
+        position_count = len(self.trade_costs)
         if position_count >= self.p.slots:
             self._log_daily_status(dt_str)
             return
             
+        target_codes = core.select_targets(dt_datetime, {'rank_map': rank_map})
+        if not target_codes:
+            self._log_daily_status(dt_str)
+            return
+            
         target_pct = 1.0 / self.p.slots
-        
         for code in target_codes:
             if position_count >= self.p.slots: break
-            if code in self.trade_costs or code in sold_today: continue 
+            if code in self.trade_costs or code in self.to_sell_queue: continue
             
             data = self.getdatabyname(code)
             if data is None or len(data) <= 1: continue
             
+            # 买入涨停检查：开盘涨停无法买入
+            if data.open[0] >= data.close[-1] * 1.095:
+                continue
+                
             context = {
                 'rank_map': rank_map, 'poc': data.poc[0] if hasattr(data, 'poc') else None,
                 'open': data.open[0], 'rank': rank_map.get(code)
@@ -100,9 +111,8 @@ class KSPStrategy(bt.Strategy):
             exec_price = core.get_execution_price(code, dt_datetime, context)
             if exec_price <= 0.01: continue
             
-            self.order_target_percent(data=data, target=target_pct,
-                                     exectype=bt.Order.Limit, price=exec_price)
-            
+            # 发出买入指令
+            self.order_target_percent(data=data, target=target_pct, exectype=bt.Order.Limit, price=exec_price)
             self.trade_records.append({
                 'date': dt_str, 'action': 'BUY_SIGNAL', 'code': code,
                 'price': float(exec_price), 'target_pct': float(target_pct),
