@@ -56,8 +56,7 @@ class DailyContext:
         # 风险项判定：
         # - 峰度 < 0: 分布过于平坦，缺乏价格共识
         # - 偏度 > 0: 价格重心偏下，上方抛压重
-        # - POC 破位: 当前 POC 低于昨日收盘价 2% 以上
-        is_bad = (df['kurt'] < 0) | (df['skew'] > 0) | (df['poc'] < df['prev_close'] * 0.98)
+        is_bad = (df['kurt'] < 0) | (df['skew'] > 0)
         
         df['ksp_score'] = np.where(is_bad, -magnitude, magnitude)
         
