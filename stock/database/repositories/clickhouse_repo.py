@@ -1,19 +1,17 @@
-import pandas as pd
-from clickhouse_driver import Client
-import time
+import io
+import logging
 import os
+import subprocess
+import time
 from typing import List, Optional
-from stock.database.base import BaseRepository
-from stock.config import settings
 
 import pandas as pd
-import subprocess
-import os
-import io
-import time
-from typing import List, Optional
-from stock.database.base import BaseRepository
+from clickhouse_driver import Client
+
 from stock.config import settings
+from stock.database.base import BaseRepository
+
+logger = logging.getLogger(__name__)
 
 class ClickHouseRepository(BaseRepository):
     """
@@ -30,13 +28,12 @@ class ClickHouseRepository(BaseRepository):
         try:
             res = self._run_cli("SELECT 1")
             if res.strip() == "1":
-                self._log_error("CLI Bridge Connected: clickhouse-client is functional.")
+                logger.info("CLI Bridge Connected: clickhouse-client is functional.")
         except Exception as e:
-            self._log_error(f"CLI Bridge Failure: {str(e)}")
+            logger.error(f"CLI Bridge Failure: {str(e)}")
 
     def _run_cli(self, sql: str, format: str = "CSVWithNames") -> str:
         """执行 clickhouse-client 命令并返回输出字符串"""
-        # 使用 127.0.0.1 端口 9000 明确连接
         cmd = [
             "clickhouse", "client",
             "--host", "127.0.0.1",
@@ -45,20 +42,23 @@ class ClickHouseRepository(BaseRepository):
             "--format", format
         ]
         
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            error_msg = f"ClickHouse CLI Error: {result.stderr}"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg) # Fail Fast: 立即抛出异常，阻止后续逻辑运行
         return result.stdout
 
     def _log_error(self, message: str):
-        os.makedirs("logs", exist_ok=True)
-        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-        with open("logs/db_error.log", "a", encoding="utf-8") as f:
-            f.write(f"[{timestamp}] {message}\n")
+        # 兼容旧代码，将日志记录转发给 logger
+        logger.error(message)
 
     def query(self, sql: str, params: Optional[dict] = None) -> pd.DataFrame:
         # 将参数手动替换到 SQL 中 (CLI 不支持参数化)
         if params:
             for k, v in params.items():
-                val = f"'{v}'" if isinstance(v, str) else str(v)
+                escaped = v.replace("'", "''") if isinstance(v, str) else v
+                val = f"'{escaped}'" if isinstance(v, str) else str(v)
                 sql = sql.replace(f"{{{k}}}", val)
                 sql = sql.replace(f":{k}", val)
 
@@ -133,7 +133,7 @@ class ClickHouseRepository(BaseRepository):
     def create_daily_kline_table(self):
         query = f"""
         CREATE TABLE IF NOT EXISTS {settings.TABLE_DAILY} (
-            date String, code String, open Float64, high Float64, low Float64, close Float64, volume Int64, amount Float64, real_price Float64, skew Float64, kurt Float64, poc Float64, morning_mean Float64, afternoon_mean Float64, min_time String, ksp_score Float64, ksp_sum_14d Float64, ksp_sum_7d Float64, ksp_sum_5d Float64, ksp_rank Int32, ksp_sum_14d_rank Int32, ksp_sum_7d_rank Int32, ksp_sum_5d_rank Int32, list_days Int32, pct_chg_skew_22d Float64, pct_chg_kurt_10d Float64, net_mf Float64, net_mf_5d Float64, net_mf_10d Float64, net_mf_20d Float64, ret_5d Float64, ret_10d Float64, ret_20d Float64, turn Float64
+            date String, code String, open Float64, high Float64, low Float64, close Float64, volume Int64, amount Float64, real_price Float64, skew Float64, kurt Float64, poc Float64, morning_mean Float64, afternoon_mean Float64, min_time String, ksp_score Float64, ksp_sum_14d Float64, ksp_sum_10d Float64, ksp_sum_7d Float64, ksp_sum_5d Float64, ksp_rank Int32, ksp_sum_14d_rank Int32, ksp_sum_10d_rank Int32, ksp_sum_7d_rank Int32, ksp_sum_5d_rank Int32, list_days Int32, pct_chg_skew_22d Float64, pct_chg_kurt_10d Float64, net_mf Float64, net_mf_5d Float64, net_mf_10d Float64, net_mf_20d Float64, ret_5d Float64, ret_10d Float64, ret_20d Float64, turn Float64
         ) ENGINE = ReplacingMergeTree() ORDER BY (code, date)
         """
         self.execute(query)

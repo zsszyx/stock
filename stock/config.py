@@ -3,8 +3,7 @@ from pathlib import Path
 from typing import Optional
 
 class Settings(BaseSettings):
-    # Base Path: /Users/zsy/stock/stock
-    BASE_DIR: Path = Path(__file__).parent.parent
+    BASE_DIR: Path = Path(__file__).resolve().parent.parent
     
     # ClickHouse Configuration
     CH_HOST: str = "127.0.0.1"
@@ -12,6 +11,7 @@ class Settings(BaseSettings):
     CH_USER: str = "default"
     CH_PASSWORD: str = ""
     CH_DATABASE: str = "default"
+    SQLITE_URL: str = "sqlite:///stock.db"
 
     # Table Names
     TABLE_MIN5: str = "mintues5"

@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 import pandas as pd
-from typing import List, Optional
+from typing import List, Optional, Dict
 
 class BaseRepository(ABC):
     @abstractmethod
@@ -8,7 +8,11 @@ class BaseRepository(ABC):
         pass
 
     @abstractmethod
-    def insert_df(self, df: pd.DataFrame, table_name: str):
+    def insert_df(self, df: pd.DataFrame, table_name: str, if_exists: str = 'append'):
+        pass
+
+    @abstractmethod
+    def execute(self, sql: str):
         pass
 
     @abstractmethod
@@ -16,23 +20,11 @@ class BaseRepository(ABC):
         pass
 
     @abstractmethod
-    def close(self):
+    def get_max_date_for_codes(self, codes: List[str], table_name: str) -> Dict[str, str]:
         pass
 
     @abstractmethod
-    def create_mintues5_table(self):
-        pass
-
-    @abstractmethod
-    def create_daily_kline_table(self):
-        pass
-
-    @abstractmethod
-    def create_concept_tables(self):
-        pass
-
-    @abstractmethod
-    def create_benchmark_table(self):
+    def get_min_date_for_codes(self, codes: List[str], table_name: str) -> Dict[str, str]:
         pass
 
     @abstractmethod
@@ -40,5 +32,5 @@ class BaseRepository(ABC):
         pass
 
     @abstractmethod
-    def execute(self, sql: str):
+    def close(self):
         pass

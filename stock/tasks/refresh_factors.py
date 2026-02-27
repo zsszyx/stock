@@ -30,7 +30,12 @@ class RefreshFactorsTask(BaseTask):
         
         # 转换为正确的类型
         df_to_save = df_updated[DailyContext.COLUMNS].copy()
-        df_to_save['volume'] = df_to_save['volume'].astype(int)
+        
+        # 显式转换所有整数列，防止 CSV 导出时出现 .0 导致 ClickHouse 解析失败
+        int_cols = ['volume', 'ksp_rank', 'ksp_sum_14d_rank', 'ksp_sum_7d_rank', 'ksp_sum_5d_rank', 'list_days']
+        for col in int_cols:
+            if col in df_to_save.columns:
+                df_to_save[col] = df_to_save[col].fillna(0).astype(int)
         
         # 分块插入以确保 ClickHouse 处理平稳
         chunk_size = 50000
@@ -40,6 +45,11 @@ class RefreshFactorsTask(BaseTask):
             
         self.repo.optimize_table(settings.TABLE_DAILY)
         self.log_progress("Factor refresh completed successfully.")
+        
+        # 3. 自动健康自检
+        from stock.utils.health_check import DataHealthMonitor
+        monitor = DataHealthMonitor(repo=self.repo)
+        monitor.validate_or_raise()
 
     def close(self):
         self.repo.close()

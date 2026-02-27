@@ -6,17 +6,17 @@ from datetime import datetime
 from typing import List, Optional
 
 class KSPPandasData(bt.feeds.PandasData):
-    lines = ('ksp_rank', 'ksp_sum_14d_rank', 'ksp_sum_7d_rank', 'ksp_sum_5d_rank', 'list_days', 'poc', 'ksp_sum_5d', 'ksp_sum_5d_rank')
+    lines = ('ksp_rank', 'ksp_sum_14d_rank', 'ksp_sum_10d_rank', 'ksp_sum_7d_rank', 'ksp_sum_5d_rank', 'list_days', 'poc', 'ksp_sum_5d', 'ksp_sum_10d', 'is_listed')
     params = (
-        ('ksp_rank', -1), ('ksp_sum_14d_rank', -1), ('ksp_sum_7d_rank', -1), 
-        ('ksp_sum_5d_rank', -1), ('list_days', -1), ('poc', -1), ('ksp_sum_5d', -1),
-        ('ksp_sum_5d_rank', -1)
+        ('ksp_rank', -1), ('ksp_sum_14d_rank', -1), ('ksp_sum_10d_rank', -1), ('ksp_sum_7d_rank', -1), 
+        ('ksp_sum_5d_rank', -1), ('list_days', -1), ('poc', -1), ('ksp_sum_5d', -1), ('ksp_sum_10d', -1),
+        ('is_listed', -1)
     )
 
 class KSPStrategyV3(bt.Strategy):
     params = (
         ('strategy_obj', None), ('slots', 9), ('sell_rank', 300),
-        ('take_profit', 0.10), ('stop_loss', -0.02), ('ksp_period', 5), 
+        ('take_profit', 0.099), ('stop_loss', -0.02), ('ksp_period', 5), 
     )
     def __init__(self):
         self.trade_data = []
@@ -68,7 +68,7 @@ class BTBacktester:
         self.commission = commission
 
     def run(self, daily_df: pd.DataFrame, strategy_obj, strategy_name: str = 'concept_ksp', 
-            sell_rank: int = 300, take_profit: float = 0.10, stop_loss: float = -0.02, 
+            sell_rank: int = 300, take_profit: float = 0.099, stop_loss: float = -0.02, 
             ksp_period: int = 5, benchmark_df: pd.DataFrame = None):
         print("Pre-filtering target stocks...")
         all_dates = sorted(daily_df['date'].unique())

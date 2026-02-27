@@ -1,6 +1,6 @@
 import pandas as pd
 from sqlalchemy import create_engine, text
-from typing import List, Optional
+from typing import List, Optional, Dict
 from stock.database.base import BaseRepository
 from stock.config import settings
 
@@ -30,6 +30,20 @@ class SQLiteRepository(BaseRepository):
     def get_all_dates(self, table_name: str) -> List[str]:
         res = self.query(f"SELECT DISTINCT date FROM {table_name} ORDER BY date ASC")
         return res['date'].tolist() if not res.empty else []
+
+    def get_max_date_for_codes(self, codes: List[str], table_name: str) -> Dict[str, str]:
+        if not codes: return {}
+        placeholders = ', '.join(['?'] * len(codes))
+        query = f"SELECT code, max(date) as max_date FROM {table_name} WHERE code IN ({placeholders}) GROUP BY code"
+        res = self.query(query, params=codes)
+        return dict(zip(res['code'], res['max_date'])) if not res.empty else {}
+
+    def get_min_date_for_codes(self, codes: List[str], table_name: str) -> Dict[str, str]:
+        if not codes: return {}
+        placeholders = ', '.join(['?'] * len(codes))
+        query = f"SELECT code, min(date) as min_date FROM {table_name} WHERE code IN ({placeholders}) GROUP BY code"
+        res = self.query(query, params=codes)
+        return dict(zip(res['code'], res['min_date'])) if not res.empty else {}
 
     def close(self):
         if self.engine:

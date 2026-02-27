@@ -15,11 +15,13 @@ class KSPCore(BaseStrategy):
     def __init__(self, 
                  selector_obj: Any,
                  slots: int = 9,
+                 entry_rank: int = 100,
                  sell_rank: int = 400,
-                 take_profit: float = 0.10,
+                 take_profit: float = 0.099,
                  stop_loss: float = -0.02):
         self.selector = selector_obj
         self.slots = slots
+        self.entry_rank = entry_rank
         self.sell_rank = sell_rank
         self.take_profit = take_profit
         self.stop_loss = stop_loss
@@ -39,34 +41,35 @@ class KSPCore(BaseStrategy):
                     date: datetime, 
                     context: Dict[str, Any]) -> Optional[str]:
         """
-        KSP 退出逻辑判断：止损、止盈或排名超限
-        :param context: 必须包含 'rank' 键（当前股票的排名）
+        KSP 退出逻辑判断：5日排名不再优于10日排名时退出
         """
         if entry_price <= 0:
             return None
         
-        pnl_pct = (current_price - entry_price) / entry_price
+        # 1. 获取排名数据
+        r5 = context.get('rank_5d')
+        r10 = context.get('rank_10d')
         
-        # 1. 强制止损
-        if pnl_pct <= self.stop_loss:
-            return f"stop_loss_{pnl_pct:.2%}"
+        # 如果缺少排名数据，保守起见不在此处退出 (或根据需要调整)
+        if r5 is None or r10 is None or np.isnan(r5) or np.isnan(r10):
+            return None
+            
+        # 2. 动能反转逻辑：5日排名不再优于10日排名 (即 r5 >= r10)
+        # 这里的排名是数值，数值越小排名越高
+        if r5 >= r10:
+            return f"momentum_flip_r5_{r5:.0f}_r10_{r10:.0f}"
         
-        # 2. 止盈
-        if pnl_pct >= self.take_profit:
-            return f"take_profit_{pnl_pct:.2%}"
-        
-        # 3. 排名卖出逻辑 (KSP核心机制)
-        rank = context.get('rank')
-        if rank is not None and not np.isnan(rank):
-            if rank > self.sell_rank:
-                return f"rank_{rank:.0f}_exceeds_{self.sell_rank}"
+        # 3. 硬门槛：如果 5日排名跌出 sell_rank (可选，保持一定的绝对质量控制)
+        if r5 > self.sell_rank:
+            return f"rank_5d_{r5:.0f}_exceeds_{self.sell_rank}"
         
         return None
 
     def get_execution_price(self, code: str, date: datetime, context: Dict[str, Any]) -> float:
         """
-        执行价格优先使用 POC，无 POC 时回退至开盘价
-        :param context: 包含 'poc' 和 'open'
+        执行价格决策：
+        1. 严格使用 POC 价格作为限价单价格，以避免过高的买入点
+        2. 仅当 POC 无效时回退至开盘价
         """
         poc_price = context.get('poc')
         open_price = context.get('open', 0.0)
@@ -77,7 +80,7 @@ class KSPCore(BaseStrategy):
 
     def filter_candidates(self, candidates: List[str], date: datetime, context: Dict[str, Any]) -> List[str]:
         """
-        按 KSP 排名规则过滤掉排名已超过 sell_rank 的标的
+        按 KSP 排名规则过滤掉排名已超过 entry_rank 的标的 (买入时的硬门槛)
         :param context: Dict[code, rank]
         """
         filtered = []
@@ -87,7 +90,7 @@ class KSPCore(BaseStrategy):
             rank = rank_map.get(code)
             
             if rank is not None and not np.isnan(rank):
-                if rank <= self.sell_rank:
+                if rank <= self.entry_rank:
                     filtered.append(code)
             else:
                 # 如果没有排名数据，保持现状或根据策略决定（此处保守起见跳过）

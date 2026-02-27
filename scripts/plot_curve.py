@@ -9,18 +9,27 @@ plt.rcParams['font.sans-serif'] = ['Arial Unicode MS'] # macOS 字体
 plt.rcParams['axes.unicode_minus'] = False
 
 def plot_equity_curve():
-    daily_file = 'backtest_daily.csv'
-    if not os.path.exists(daily_file):
-        print(f"❌ 找不到数据文件: {daily_file}")
+    json_file = 'backtest_detailed_log.json'
+    if not os.path.exists(json_file):
+        print(f"❌ 找不到数据文件: {json_file}")
         return
 
     # 1. 加载策略数据
-    df = pd.read_csv(daily_file)
+    import json
+    with open(json_file, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+    
+    daily_records = data.get('daily_records', [])
+    if not daily_records:
+        print("❌ 日志文件中没有每日记录")
+        return
+        
+    df = pd.DataFrame(daily_records)
     df['date'] = pd.to_datetime(df['date'])
     df = df.sort_values('date')
     
     # 归一化策略净值
-    initial_value = df['total_value'].iloc[0]
+    initial_value = 1000000.0 # 初始资金
     df['strategy_equity'] = df['total_value'] / initial_value
 
     # 2. 模拟基准数据 (由于此处无法直接联网获取实时指数，我们从每日涨跌幅估算或展示策略净值)

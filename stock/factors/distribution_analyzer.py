@@ -1,13 +1,14 @@
 import numpy as np
 import pandas as pd
 from scipy.stats import skew, kurtosis
+from functools import cached_property
 
 class DistributionAnalyzer:
     def __init__(self, prices, volumes, amounts=None, times=None, poc_bins=50):
         self.prices = np.array(prices, dtype=float)
         self.volumes = np.array(volumes, dtype=float)
         self.amounts = np.array(amounts, dtype=float) if amounts is not None else None
-        self.times = np.array(times) if times is not None else None
+        self.times = np.array(times, dtype=str) if times is not None else None
         self.poc_bins = poc_bins
         self._is_valid = len(self.prices) > 0 and np.sum(self.volumes) > 0
 

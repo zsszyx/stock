@@ -43,15 +43,13 @@ class Min5UpdateTask(BaseTask):
         # Get stock list using BaoInterface
         with BaoInterface() as bi:
             trade_dates = bi.get_trade_dates(start_date=start_date, end_date=end_date)
-            if trade_dates.empty:
-                self.log_progress("No trade dates found in range.")
-                return
-            last_day = trade_dates.iloc[-1]['calendar_date']
+            if trade_dates is None or trade_dates.empty:
+                raise ValueError(f"Fail Fast: No trade dates found in range {start_date} to {end_date}")
             
+            last_day = trade_dates.iloc[-1]['calendar_date']
             stock_list = bi.get_stock_list(date=last_day)
-            if stock_list is None:
-                self.log_progress("Failed to get stock list.")
-                return
+            if stock_list is None or stock_list.empty:
+                raise ConnectionError(f"Fail Fast: Failed to retrieve stock list from provider for date {last_day}")
 
             # Filter Main Board and ChiNext, exclude ST
             stock_list = stock_list[stock_list['code'].str.match(r'^(sh\.60|sz\.00|sz\.30)')]

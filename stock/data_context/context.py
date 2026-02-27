@@ -2,7 +2,10 @@ import pandas as pd
 import numpy as np
 from typing import List, Optional
 from datetime import datetime
+
 from stock.factors.distribution_analyzer import DistributionAnalyzer
+from stock.factors.ksp_factors import KSPFactorEngine
+from stock.utils.data_utils import DataUtils
 
 class Minutes5Context:
     def __init__(self, df: pd.DataFrame):
@@ -28,64 +31,71 @@ class DailyContext:
         'date', 'code', 'open', 'high', 'low', 'close', 
         'volume', 'amount', 'real_price', 'skew', 'kurt', 
         'poc', 'morning_mean', 'afternoon_mean', 'min_time',
-        'ksp_score', 'ksp_sum_14d', 'ksp_sum_7d', 'ksp_sum_5d',
-        'ksp_rank', 'ksp_sum_14d_rank', 'ksp_sum_7d_rank', 'ksp_sum_5d_rank',
-        'list_days', 'pct_chg_skew_22d', 'pct_chg_kurt_10d', 'turn'
+        'ksp_score', 'ksp_sum_14d', 'ksp_sum_10d', 'ksp_sum_7d', 'ksp_sum_5d',
+        'ksp_rank', 'ksp_sum_14d_rank', 'ksp_sum_10d_rank', 'ksp_sum_7d_rank', 'ksp_sum_5d_rank',
+        'list_days', 'pct_chg_skew_22d', 'pct_chg_kurt_10d', 
+        'net_mf', 'net_mf_5d', 'net_mf_10d', 'net_mf_20d',
+        'ret_5d', 'ret_10d', 'ret_20d', 'turn'
     ]
 
     def __init__(self, min5_context: Optional[Minutes5Context] = None, daily_df: Optional[pd.DataFrame] = None):
         if daily_df is not None: self._daily_df = daily_df.copy()
         elif min5_context is not None: self._daily_df = self.from_min5(min5_context.data)
         else: raise ValueError("Either min5_context or daily_df must be provided")
-        if not self._daily_df.empty: self._daily_df = self._add_derived_factors(self._daily_df)
+        
+        # Fail Fast: 必须保证核心列存在，否则立即报错
+        required = ['date', 'code', 'close', 'high', 'low']
+        missing = [c for c in required if c not in self._daily_df.columns]
+        if missing:
+            raise ValueError(f"DailyContext data integrity check failed. Missing columns: {missing}")
+
+        if not self._daily_df.empty: 
+            self._daily_df = self._add_derived_factors(self._daily_df)
+            self._daily_df = self._daily_df.sort_values(['date', 'code']).reset_index(drop=True)
+            
         self._all_dates = sorted(self._daily_df['date'].unique())
         self._date_to_idx = {d: i for i, d in enumerate(self._all_dates)}
+        
+        # Pre-calculate date boundaries for O(1) slicing
+        self._date_offsets = {}
+        if not self._daily_df.empty:
+            groups = self._daily_df.groupby('date').groups
+            for d, idx_list in groups.items():
+                self._date_offsets[d] = (idx_list[0], idx_list[-1] + 1)
 
     @staticmethod
     def _add_derived_factors(df: pd.DataFrame) -> pd.DataFrame:
-        df = df.sort_values(['code', 'date'])
-        # 1. 基础涨跌幅 (使用真实收盘价)
-        df['prev_close'] = df.groupby('code')['close'].shift(1)
-        df['pct_chg'] = (df['close'] - df['prev_close']) / df['prev_close']
-        df['amplitude'] = (df['high'] - df['low']) / df['prev_close']
         
-        # 2. 核心 KSP 分数逻辑 (纯净统计指标驱动，不再受涨跌幅干扰)
-        # magnitude 仅由分布的紧凑程度和非对称性决定
-        magnitude = df['kurt'].abs() * df['skew'].abs()
+        # 1. 价格指标
+        df = KSPFactorEngine.add_price_metrics(df)
         
-        # 风险项判定：
-        # - 峰度 < 0: 分布过于平坦，缺乏价格共识
-        # - 偏度 > 0: 价格重心偏下，上方抛压重
-        is_bad = (df['kurt'] < 0) | (df['skew'] > 0)
+        # 2. 核心 KSP 分数
+        df = KSPFactorEngine.calculate_ksp_scores(df)
         
-        df['ksp_score'] = np.where(is_bad, -magnitude, magnitude)
+        # 3. 滚动因子与排名
+        df = KSPFactorEngine.add_rolling_factors(df)
         
-        # 3. 滚动因子 (不进行任何填充，缺失即为 NaN)
-        for p in [5, 7, 14]:
-            df[f'ksp_sum_{p}d'] = df.groupby('code')['ksp_score'].transform(lambda x: x.rolling(window=p, min_periods=1).sum())
-        
-        df['ksp_rank'] = df.groupby('date')['ksp_score'].rank(ascending=False, method='min')
-        for p in [5, 7, 14]:
-            df[f'ksp_sum_{p}d_rank'] = df.groupby('date')[f'ksp_sum_{p}d'].rank(ascending=False, method='min')
-        
-        # 4. 上市时长 (识别数据库起始日)
+        # 4. 上市时长处理
         global_min_date = df['date'].min()
         df['first_date'] = df.groupby('code')['date'].transform('min')
         df['list_days'] = (pd.to_datetime(df['date']) - pd.to_datetime(df['first_date'])).dt.days
         df.loc[df['first_date'] == global_min_date, 'list_days'] += 1000
-
-        # 5. 统计指标
-        df['pct_chg_skew_22d'] = df.groupby('code')['pct_chg'].transform(lambda x: x.rolling(window=22, min_periods=10).skew())
-        df['pct_chg_kurt_10d'] = df.groupby('code')['pct_chg'].transform(lambda x: x.rolling(window=10, min_periods=5).kurt())
+        
         return df
 
     @staticmethod
     def from_min5(df_min5: pd.DataFrame) -> pd.DataFrame:
         if df_min5.empty: return pd.DataFrame(columns=DailyContext.COLUMNS)
-        df = df_min5.copy()
+        
+        # 使用工具类统一清洗
+        df = DataUtils.clean_numeric_df(df_min5.copy(), ['open', 'high', 'low', 'close', 'volume', 'amount'])
         
         # --- 核心：使用 5 分钟成交均价进行统计分析 ---
-        df['real_price'] = np.divide(df['amount'], df['volume'], out=np.zeros_like(df['amount']), where=df['volume']!=0)
+        df['real_price'] = np.divide(df['amount'], df['volume'], out=np.zeros_like(df['amount'], dtype=float), where=df['volume']!=0)
+        
+        # Pre-calculate money flow for net_mf to avoid slow lambda indexing
+        df['bar_sign'] = np.where(df['close'] > df['open'], 1, -1)
+        df['mf'] = df['amount'] * df['bar_sign']
         
         # 聚合基础日线
         agg_res = df.sort_values(['code', 'date', 'time']).groupby(['code', 'date']).agg(
@@ -95,7 +105,7 @@ class DailyContext:
             close=('close', 'last'),
             volume=('volume', 'sum'),
             amount=('amount', 'sum'),
-            net_mf=('amount', lambda x: (x * np.where(df.loc[x.index, 'close'] > df.loc[x.index, 'open'], 1, -1)).sum())
+            net_mf=('mf', 'sum')
         )
         
         # 记录每日均价
@@ -103,7 +113,7 @@ class DailyContext:
         
         def calc_complex_stats(group):
             # 严格使用 5 分钟均价 (real_price) 传入 Analyzer
-            prices = np.divide(group['amount'].values, group['volume'].values, out=np.zeros_like(group['amount'].values), where=group['volume'].values!=0)
+            prices = np.divide(group['amount'].values, group['volume'].values, out=np.zeros_like(group['amount'].values, dtype=float), where=group['volume'].values!=0)
             analyzer = DistributionAnalyzer(prices=prices, volumes=group['volume'].values, amounts=group['amount'].values, times=group['time'].values)
             return pd.Series({
                 'skew': analyzer.skewness, 
@@ -117,8 +127,20 @@ class DailyContext:
         complex_stats = df.groupby(['code', 'date']).apply(calc_complex_stats, include_groups=False)
         daily = agg_res.join(complex_stats).reset_index()
         
+        # 确保所有列都存在且类型正确
+        int_cols = ['volume', 'ksp_rank', 'ksp_sum_14d_rank', 'ksp_sum_10d_rank', 'ksp_sum_7d_rank', 'ksp_sum_5d_rank', 'list_days']
         for col in DailyContext.COLUMNS:
-            if col not in daily.columns: daily[col] = 0.0 if 'time' not in col else ""
+            if col not in daily.columns:
+                if col in int_cols:
+                    if 'rank' in col:
+                        daily[col] = 5000
+                    else:
+                        daily[col] = 0
+                elif 'time' in col or col in ['date', 'code']:
+                    daily[col] = ""
+                else:
+                    daily[col] = 0.0
+        
         return daily[DailyContext.COLUMNS]
 
     def get_window(self, date: datetime, window_days: int = 1, codes: Optional[List[str]] = None) -> pd.DataFrame:

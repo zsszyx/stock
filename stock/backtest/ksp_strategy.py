@@ -14,6 +14,7 @@ class KSPStrategy(bt.Strategy):
     params = (
         ('core_strategy', None), # 必须是 BaseStrategy 的子类实例
         ('slots', 9),
+        ('ksp_period', 5), # KSP 排名周期: 5, 7, 10, 14
         ('log_file', 'backtest_detailed_log.json'),
     )
 
@@ -23,8 +24,53 @@ class KSPStrategy(bt.Strategy):
         self.trade_costs = {}
         self.to_sell_queue = {} # 记录待卖出的标的及其原因: {code: reason}
         
+        # 确定排名列名
+        self.rank_attr = f'ksp_sum_{self.p.ksp_period}d_rank'
+        
         if self.p.core_strategy is None:
             raise ValueError("Must provide 'core_strategy' parameter (instance of BaseStrategy)")
+
+    def _get_data(self, code):
+        """Safe wrapper to get data by name, avoiding KeyError"""
+        try:
+            return self.getdatabyname(code)
+        except (KeyError, IndexError):
+            return None
+
+    def notify_order(self, order):
+        if order.status in [order.Submitted, order.Accepted]:
+            return
+
+        if order.status in [order.Completed]:
+            if order.isbuy():
+                dt_str = self.data.datetime.date(0).strftime('%Y-%m-%d')
+                self.trade_records.append({
+                    'date': dt_str, 'action': 'BUY_FILL', 'code': order.data._name,
+                    'price': float(order.executed.price), 'size': int(order.executed.size),
+                    'cost': float(order.executed.value), 'comm': float(order.executed.comm)
+                })
+                self.trade_costs[order.data._name] = {
+                    'avg_cost': float(order.executed.price), 
+                    'date': dt_str,
+                    'size': int(order.executed.size)
+                }
+            elif order.issell():
+                dt_str = self.data.datetime.date(0).strftime('%Y-%m-%d')
+                reason = getattr(order, 'sell_reason', 'unknown')
+                self.trade_records.append({
+                    'date': dt_str, 'action': 'SELL_FILL', 'code': order.data._name,
+                    'price': float(order.executed.price), 'size': int(order.executed.size),
+                    'cost': float(order.executed.value), 'comm': float(order.executed.comm),
+                    'reason': reason
+                })
+        
+        elif order.status in [order.Canceled, order.Margin, order.Rejected]:
+            # 记录失败订单以便审计
+            dt_str = self.data.datetime.date(0).strftime('%Y-%m-%d')
+            self.trade_records.append({
+                'date': dt_str, 'action': 'ORDER_FAILED', 'code': order.data._name,
+                'status': order.getstatusname()
+            })
 
     def next(self):
         dt = self.data.datetime.date(0)
@@ -32,156 +78,180 @@ class KSPStrategy(bt.Strategy):
         dt_datetime = datetime.combine(dt, datetime.min.time())
         core = self.p.core_strategy
         
+        # 0. 撤销所有尚未成交的买单 (实现：第二天买不上就空着，不留旧单)
+        open_orders = self.broker.get_orders_open()
+        for order in open_orders:
+            if order.isbuy():
+                self.cancel(order)
+
         # 1. 准备排名上下文
-        rank_map = {d._name: d.ksp_sum_5d_rank[0] for d in self.datas if hasattr(d, 'ksp_sum_5d_rank')}
-        sold_today = set() # 记录今日已决定卖出的股票，防止当日重买
+        rank_map = {}
+        rank_5d_map = {}
+        rank_10d_map = {}
+        
+        for d in self.datas:
+            if d._name.startswith('_'): continue
+            try:
+                lines = d.lines
+                rank_map[d._name] = getattr(lines, self.rank_attr)[0]
+                rank_5d_map[d._name] = lines.ksp_sum_5d_rank[0]
+                rank_10d_map[d._name] = lines.ksp_sum_10d_rank[0]
+            except (AttributeError, IndexError):
+                continue
+
+        sold_today = set() 
 
         # 2. 处理待卖出队列 (执行前一日的决策)
         for code in list(self.to_sell_queue.keys()):
-            data = self.getdatabyname(code)
-            if data is None:
+            data = self._get_data(code)
+            if data is None or len(data) == 0:
                 del self.to_sell_queue[code]
                 continue
             
-            # 涨跌停检查：如果今日开盘即跌停，则无法卖出
+            if data.volume[0] <= 0:
+                continue
+            
             if len(data) > 1 and data.open[0] <= data.close[-1] * 0.905:
                 continue
             
-            # 可以卖出
             pos = self.getposition(data)
             if pos.size > 0:
-                buy_price = self.trade_costs[code]['avg_cost']
                 reason = self.to_sell_queue[code]
-                self.close(data=data)
-                self.trade_records.append({
-                    'date': dt_str, 'action': 'SELL_SIGNAL', 'code': code,
-                    'price': float(data.open[0]), 'size': int(pos.size),
-                    'profit_pct': float((data.open[0] - buy_price) / buy_price),
-                    'reason': reason,
-                })
-                del self.trade_costs[code]
-                sold_today.add(code) # 标记为已卖出
+                order = self.close(data=data)
+                if order:
+                    order.sell_reason = reason
+                sold_today.add(code) 
             del self.to_sell_queue[code]
 
         # 3. 产生新的卖出决策 (为明日准备)
         for code in list(self.trade_costs.keys()):
             if code in self.to_sell_queue: continue
             
-            data = self.getdatabyname(code)
+            data = self._get_data(code)
+            if data is None or len(data) == 0: continue
             pos = self.getposition(data)
             if pos.size <= 0: continue
             
             buy_price = self.trade_costs[code]['avg_cost']
             current_close = data.close[0]
-            context = {'rank': rank_map.get(code), 'open': data.open[0], 'close': data.close[0]}
+            context = {
+                'rank': rank_map.get(code), 
+                'rank_5d': rank_5d_map.get(code),
+                'rank_10d': rank_10d_map.get(code),
+                'ksp_sum_5d_rank': rank_5d_map.get(code),
+                'ksp_sum_10d_rank': rank_10d_map.get(code),
+                'open': data.open[0], 
+                'close': data.close[0]
+            }
             
             exit_reason = core.should_exit(code, buy_price, current_close, dt_datetime, context)
             if exit_reason:
                 self.to_sell_queue[code] = exit_reason
 
         # 4. 买入决策
-        position_count = len(self.trade_costs)
-        if position_count >= self.p.slots:
-            self._log_daily_status(dt_str)
-            return
-            
-        target_codes = core.select_targets(dt_datetime, {'rank_map': rank_map})
-        if not target_codes:
-            self._log_daily_status(dt_str)
-            return
-            
-        target_pct = 1.0 / self.p.slots
-        for code in target_codes:
-            if position_count >= self.p.slots: break
-            if code in self.trade_costs or code in self.to_sell_queue: continue
-            
-            data = self.getdatabyname(code)
-            if data is None or len(data) <= 1: continue
-            
-            # 买入涨停检查：开盘涨停无法买入
-            if data.open[0] >= data.close[-1] * 1.095:
-                continue
+        # 注意：此处 pending_buy_codes 理论上为空，因为我们在 step 0 撤单了
+        open_orders = self.broker.get_orders_open()
+        pending_buy_codes = {o.data._name for o in open_orders if o.isbuy()}
+        
+        active_positions = [p for p in self.datas if self.getposition(p).size > 0]
+        position_count = len(active_positions) + len(pending_buy_codes)
+        
+        if position_count < self.p.slots:
+            ctx = {
+                'rank_map': rank_map,
+                'rank_5d_map': rank_5d_map,
+                'rank_10d_map': rank_10d_map
+            }
+            target_codes = core.select_targets(dt_datetime, ctx)
                 
-            context = {
-                'rank_map': rank_map, 'poc': data.poc[0] if hasattr(data, 'poc') else None,
-                'open': data.open[0], 'rank': rank_map.get(code)
-            }
-            
-            if not core.filter_candidates([code], dt_datetime, context): continue
-            exec_price = core.get_execution_price(code, dt_datetime, context)
-            if exec_price <= 0.01: continue
-            
-            # 发出买入指令
-            self.order_target_percent(data=data, target=target_pct, exectype=bt.Order.Limit, price=exec_price)
-            self.trade_records.append({
-                'date': dt_str, 'action': 'BUY_SIGNAL', 'code': code,
-                'price': float(exec_price), 'target_pct': float(target_pct),
-                'ksp_rank': float(context['rank']) if context['rank'] is not None else 999,
-            })
-            self.trade_costs[code] = {'avg_cost': exec_price, 'date': dt_str}
-            position_count += 1
+            if target_codes:
+                target_pct = 1.0 / self.p.slots
+                for code in target_codes:
+                    if position_count >= self.p.slots: break
+                    
+                    if (code in self.trade_costs or 
+                        code in sold_today or 
+                        code in self.to_sell_queue or 
+                        code in pending_buy_codes):
+                        continue
+                    
+                    data = self._get_data(code)
+                    if data is None or len(data) < 1 or data.volume[0] <= 0: 
+                        continue
+                    
+                    if len(data) > 1 and data.open[0] >= data.close[-1] * 1.095:
+                        continue
+                        
+                    # 计算量比 (当日成交量 / 过去 5 日平均成交量)
+                    vol_window = 5
+                    if len(data) > vol_window:
+                        vols = data.volume.get(ago=0, size=vol_window + 1)
+                        avg_vol = np.mean(vols[1:]) # 过去 5 天
+                        curr_vol = vols[0]
+                        vol_ratio = curr_vol / avg_vol if avg_vol > 0 else 1.0
+                    else:
+                        vol_ratio = 1.0
 
-        self._log_daily_status(dt_str)
-        
-        if position_count >= self.p.slots:
-            self._log_daily_status(dt_str)
-            return
-            
-        target_pct = 1.0 / self.p.slots
-        
-        for code in target_codes:
-            if position_count >= self.p.slots: break
-            # 关键：如果在持有中，或者今天刚发出卖出信号(sold_today)，则不买入
-            if code in self.trade_costs or code in sold_today: 
-                continue 
-            
-            data = self.getdatabyname(code)
-            if data is None or len(data) <= 1: continue
-            
-            context = {
-                'rank_map': rank_map, 'poc': data.poc[0] if hasattr(data, 'poc') else None,
-                'open': data.open[0], 'rank': rank_map.get(code)
-            }
-            
-            if not core.filter_candidates([code], dt_datetime, context): continue
-            exec_price = core.get_execution_price(code, dt_datetime, context)
-            if exec_price <= 0.01: continue
-            
-            self.order_target_percent(data=data, target=target_pct,
-                                     exectype=bt.Order.Limit, price=exec_price)
-            
-            self.trade_records.append({
-                'date': dt_str, 'action': 'BUY_SIGNAL', 'code': code,
-                'price': float(exec_price), 'target_pct': float(target_pct),
-                'ksp_rank': float(context['rank']) if context['rank'] is not None else 999,
-            })
-            self.trade_costs[code] = {'avg_cost': exec_price, 'date': dt_str}
-            position_count += 1
+                    context = {
+                        'rank_map': rank_map, 
+                        'rank_5d_map': rank_5d_map,
+                        'rank_10d_map': rank_10d_map,
+                        'rank_5d': rank_5d_map.get(code),
+                        'rank_10d': rank_10d_map.get(code),
+                        'ksp_sum_5d_rank': rank_5d_map.get(code),
+                        'ksp_sum_10d_rank': rank_10d_map.get(code),
+                        'poc': data.poc[0] if hasattr(data, 'poc') else None,
+                        'open': data.open[0], 
+                        'high': data.high[0],
+                        'low': data.low[0],
+                        'close': data.close[0],
+                        'vol_ratio': vol_ratio,
+                        'rank': rank_map.get(code)
+                    }
+                    
+                    if not core.filter_candidates([code], dt_datetime, context):
+                        continue
+                    
+                    # 使用市价单 (Market)，在次日开盘时直接成交
+                    self.order_target_percent(data=data, target=target_pct, exectype=bt.Order.Market)
+                    position_count += 1
 
-        self._log_daily_status(dt_str)
+        # 5. 记录每日状态
+        self._log_daily_status(dt_str, rank_map)
 
-    def _log_daily_status(self, dt_str):
+    def _log_daily_status(self, dt_str, rank_map=None):
         cash = self.broker.getcash()
-        total_value = self.broker.getvalue()
-        
         positions_list = []
-        for code, cost_info in self.trade_costs.items():
-            data = self.getdatabyname(code)
-            if data is None: continue
+        position_value = 0.0
+        for data in self.datas:
+            if data._name.startswith('_'): continue
             pos = self.getposition(data)
-            if pos.size <= 0: continue
-            price = data.close[0]
-            positions_list.append({
-                'code': code, 'size': int(pos.size),
-                'buy_price': float(cost_info['avg_cost']),
-                'current_price': float(price),
-                'value': float(pos.size * price),
-                'profit_pct': float((price - cost_info['avg_cost']) / cost_info['avg_cost']) if cost_info['avg_cost'] > 0 else 0.0,
-            })
-        
+            if pos.size > 0:
+                code = data._name
+                try:
+                    price = data.close[0]
+                    if np.isnan(price): price = 0.0
+                except:
+                    price = 0.0
+                cost_info = self.trade_costs.get(code, {'avg_cost': price})
+                val = float(pos.size * price)
+                position_value += val
+                positions_list.append({
+                    'code': code, 'size': int(pos.size),
+                    'buy_price': float(cost_info['avg_cost']),
+                    'price': float(price),
+                    'value': val,
+                    'profit_pct': float((price - cost_info['avg_cost']) / cost_info['avg_cost']) if cost_info['avg_cost'] > 0 else 0.0,
+                    'ksp_rank': float(rank_map.get(code, 999)) if rank_map else 999
+                })
+        total_value = cash + position_value
+        active_codes = [p['code'] for p in positions_list]
+        for code in list(self.trade_costs.keys()):
+            if code not in active_codes:
+                del self.trade_costs[code]
         self.daily_records.append({
             'date': dt_str, 'total_value': float(total_value),
-            'cash': float(cash), 'position_value': float(total_value - cash),
+            'cash': float(cash), 'position_value': float(position_value),
             'position_count': len(positions_list), 'positions': positions_list,
         })
 
@@ -198,51 +268,5 @@ class KSPStrategy(bt.Strategy):
         try:
             with open(self.p.log_file, 'w', encoding='utf-8') as f:
                 json.dump(log_data, f, ensure_ascii=False, indent=2)
-            print(f"\n✅ 详细日志已保存: {self.p.log_file}")
-        except Exception as e:
-            print(f"❌ 保存日志失败: {e}")
-
-
-    def _log_daily_status(self, dt_str):
-        cash = self.broker.getcash()
-        total_value = self.broker.getvalue()
-        
-        positions_list = []
-        for code, cost_info in self.trade_costs.items():
-            data = self.getdatabyname(code)
-            if data is None:
-                continue
-            pos = self.getposition(data)
-            if pos.size <= 0:
-                continue
-            price = data.close[0]
-            positions_list.append({
-                'code': code, 'size': int(pos.size),
-                'buy_price': float(cost_info['avg_cost']),
-                'current_price': float(price),
-                'value': float(pos.size * price),
-                'profit_pct': float((price - cost_info['avg_cost']) / cost_info['avg_cost']) if cost_info['avg_cost'] > 0 else 0.0,
-            })
-        
-        self.daily_records.append({
-            'date': dt_str, 'total_value': float(total_value),
-            'cash': float(cash), 'position_value': float(total_value - cash),
-            'position_count': len(positions_list), 'positions': positions_list,
-        })
-
-    def stop(self):
-        log_data = {
-            'summary': {
-                'final_value': float(self.broker.getvalue()),
-                'total_trades': len(self.trade_records),
-                'total_days': len(self.daily_records),
-            },
-            'daily_records': self.daily_records,
-            'trade_records': self.trade_records,
-        }
-        try:
-            with open(self.p.log_file, 'w', encoding='utf-8') as f:
-                json.dump(log_data, f, ensure_ascii=False, indent=2)
-            print(f"\n✅ 详细日志已保存: {self.p.log_file}")
         except Exception as e:
             print(f"❌ 保存日志失败: {e}")
