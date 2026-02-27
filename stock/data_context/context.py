@@ -33,7 +33,7 @@ class DailyContext:
         'poc', 'morning_mean', 'afternoon_mean', 'min_time',
         'ksp_score', 'ksp_sum_14d', 'ksp_sum_10d', 'ksp_sum_7d', 'ksp_sum_5d',
         'ksp_rank', 'ksp_sum_14d_rank', 'ksp_sum_10d_rank', 'ksp_sum_7d_rank', 'ksp_sum_5d_rank',
-        'list_days', 'pct_chg_skew_22d', 'pct_chg_kurt_10d', 
+        'list_days', 'is_listed_180', 'pct_chg_skew_22d', 'pct_chg_kurt_10d', 
         'net_mf', 'net_mf_5d', 'net_mf_10d', 'net_mf_20d',
         'ret_5d', 'ret_10d', 'ret_20d', 'turn'
     ]
@@ -80,6 +80,9 @@ class DailyContext:
         df['first_date'] = df.groupby('code')['date'].transform('min')
         df['list_days'] = (pd.to_datetime(df['date']) - pd.to_datetime(df['first_date'])).dt.days
         df.loc[df['first_date'] == global_min_date, 'list_days'] += 1000
+        
+        # 判断是否满足 180 天
+        df['is_listed_180'] = (df['list_days'] >= 180).astype(int)
         
         return df
 
@@ -128,7 +131,7 @@ class DailyContext:
         daily = agg_res.join(complex_stats).reset_index()
         
         # 确保所有列都存在且类型正确
-        int_cols = ['volume', 'ksp_rank', 'ksp_sum_14d_rank', 'ksp_sum_10d_rank', 'ksp_sum_7d_rank', 'ksp_sum_5d_rank', 'list_days']
+        int_cols = ['volume', 'ksp_rank', 'ksp_sum_14d_rank', 'ksp_sum_10d_rank', 'ksp_sum_7d_rank', 'ksp_sum_5d_rank', 'list_days', 'is_listed_180']
         for col in DailyContext.COLUMNS:
             if col not in daily.columns:
                 if col in int_cols:

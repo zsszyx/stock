@@ -6,10 +6,10 @@ from datetime import datetime
 from typing import List, Optional
 
 class KSPPandasData(bt.feeds.PandasData):
-    lines = ('ksp_rank', 'ksp_sum_14d_rank', 'ksp_sum_10d_rank', 'ksp_sum_7d_rank', 'ksp_sum_5d_rank', 'list_days', 'poc', 'ksp_sum_5d', 'ksp_sum_10d', 'is_listed')
+    lines = ('ksp_rank', 'ksp_sum_14d_rank', 'ksp_sum_10d_rank', 'ksp_sum_7d_rank', 'ksp_sum_5d_rank', 'list_days', 'is_listed_180', 'poc', 'ksp_sum_5d', 'ksp_sum_10d', 'is_listed')
     params = (
         ('ksp_rank', -1), ('ksp_sum_14d_rank', -1), ('ksp_sum_10d_rank', -1), ('ksp_sum_7d_rank', -1), 
-        ('ksp_sum_5d_rank', -1), ('list_days', -1), ('poc', -1), ('ksp_sum_5d', -1), ('ksp_sum_10d', -1),
+        ('ksp_sum_5d_rank', -1), ('list_days', -1), ('is_listed_180', -1), ('poc', -1), ('ksp_sum_5d', -1), ('ksp_sum_10d', -1),
         ('is_listed', -1)
     )
 

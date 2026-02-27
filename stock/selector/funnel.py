@@ -51,7 +51,9 @@ class InitialUniverseStep(FunnelStep):
             return ctx
 
         mask = pd.Series(True, index=daily_df.index)
-        if 'list_days' in daily_df.columns:
+        if 'is_listed_180' in daily_df.columns:
+            mask &= (daily_df['is_listed_180'] == 1)
+        elif 'list_days' in daily_df.columns:
             mask &= (daily_df['list_days'] >= 180)
         
         if self.ksp_col in daily_df.columns:
@@ -59,7 +61,7 @@ class InitialUniverseStep(FunnelStep):
             
         initial_pool = daily_df[mask].copy()
         
-        cols = ['code', 'ksp_score', 'poc', 'amount', 'close', 'list_days', 
+        cols = ['code', 'ksp_score', 'poc', 'amount', 'close', 'list_days', 'is_listed_180',
                 'ksp_sum_5d', 'ksp_sum_10d', 'ksp_sum_5d_rank', 'ksp_sum_10d_rank']
         existing_cols = [c for c in cols if c in initial_pool.columns]
         ctx.pool = initial_pool[existing_cols].copy()

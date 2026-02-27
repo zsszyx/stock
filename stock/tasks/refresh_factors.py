@@ -32,7 +32,7 @@ class RefreshFactorsTask(BaseTask):
         df_to_save = df_updated[DailyContext.COLUMNS].copy()
         
         # 显式转换所有整数列，防止 CSV 导出时出现 .0 导致 ClickHouse 解析失败
-        int_cols = ['volume', 'ksp_rank', 'ksp_sum_14d_rank', 'ksp_sum_7d_rank', 'ksp_sum_5d_rank', 'list_days']
+        int_cols = ['volume', 'ksp_rank', 'ksp_sum_14d_rank', 'ksp_sum_10d_rank', 'ksp_sum_7d_rank', 'ksp_sum_5d_rank', 'list_days', 'is_listed_180']
         for col in int_cols:
             if col in df_to_save.columns:
                 df_to_save[col] = df_to_save[col].fillna(0).astype(int)

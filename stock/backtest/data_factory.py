@@ -33,7 +33,7 @@ class BTDataFeedFactory:
             # 因子填充：
             # ffill 用于处理已上市期间的缺失值
             # 对于上市前的缺失值 (Backfilling)，使用“极其恶劣”的固定值，而非 bfill 未来值
-            factor_cols = ['ksp_rank', 'ksp_sum_14d_rank', 'ksp_sum_10d_rank', 'ksp_sum_7d_rank', 'ksp_sum_5d_rank', 'list_days', 'ksp_sum_5d', 'ksp_sum_10d']
+            factor_cols = ['ksp_rank', 'ksp_sum_14d_rank', 'ksp_sum_10d_rank', 'ksp_sum_7d_rank', 'ksp_sum_5d_rank', 'list_days', 'is_listed_180', 'ksp_sum_5d', 'ksp_sum_10d']
             for col in factor_cols:
                 if col in aligned.columns:
                     # 分两步：1. ffill 处理空洞；2. 用安全值填充上市前的部分
@@ -64,7 +64,7 @@ class BTDataFeedFactory:
                 datetime=None,
                 open=0, high=1, low=2, close=3, volume=4, openinterest=5,
                 ksp_rank=6, ksp_sum_14d_rank=7, ksp_sum_10d_rank=8, ksp_sum_7d_rank=9, ksp_sum_5d_rank=10,
-                list_days=11, ksp_sum_5d=12, ksp_sum_10d=13, poc=14, is_listed=15,
+                list_days=11, is_listed_180=12, ksp_sum_5d=13, ksp_sum_10d=14, poc=15, is_listed=16,
                 name=code, plot=False
             )
         except Exception:
