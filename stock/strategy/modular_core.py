@@ -66,6 +66,7 @@ class ModularKSPCore(BaseStrategy):
         rank_map = context.get('rank_map', {})
         rank_5d_map = context.get('rank_5d_map', {})
         rank_10d_map = context.get('rank_10d_map', {})
+        stock_data_map = context.get('stock_data_map', {})
 
         def clean_rank(r):
             if r is None or np.isnan(r) or r <= 0:
@@ -73,8 +74,13 @@ class ModularKSPCore(BaseStrategy):
             return float(r)
 
         for code in candidates:
+            # 基础 context (包含全局排名映射)
             stock_context = context.copy()
             stock_context['code'] = code
+            
+            # 注入个股特有数据 (如 amplitude, vol_ratio)
+            if code in stock_data_map:
+                stock_context.update(stock_data_map[code])
             
             # 获取排名用于规则检查和后续排序
             r_val = clean_rank(stock_context.get('rank') or rank_map.get(code))
@@ -91,17 +97,13 @@ class ModularKSPCore(BaseStrategy):
             if all_pass:
                 passed_with_ranks.append((code, r_val))
         
-        # 按排名(从小到大)排序，取最好的 top_n
-        # 这里的 top_n 可以复用策略的 slots，或者定义一个新的参数。
-        # 为了灵活，我们先全量返回，但在 KSPStrategy 的买入循环中会受到 slots 的限制。
-        # 如果要严格实现“满足条件的里面再挑最好的前 N 名”，就在这里排序：
+        # 按排名(从小到大)排序
         passed_with_ranks.sort(key=lambda x: x[1])
         
         return [item[0] for i, item in enumerate(passed_with_ranks)]
 
     def get_execution_price(self, code: str, date: datetime, context: Dict[str, Any]) -> float:
         """
-        执行价格决策：直接使用开盘价买入。
+        执行价格决策：由于目前使用 Market 单，此价格仅作记录参考。
         """
-        open_price = context.get('open', 0.0)
-        return float(open_price)
+        return float(context.get('open', 0.0))

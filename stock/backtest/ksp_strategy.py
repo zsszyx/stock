@@ -157,18 +157,20 @@ class KSPStrategy(bt.Strategy):
         position_count = len(active_positions) + len(pending_buy_codes)
         
         if position_count < self.p.slots:
-            ctx = {
+            # 准备过滤用的大上下文
+            filter_ctx = {
                 'rank_map': rank_map,
                 'rank_5d_map': rank_5d_map,
-                'rank_10d_map': rank_10d_map
+                'rank_10d_map': rank_10d_map,
+                'stock_data_map': {}
             }
-            target_codes = core.select_targets(dt_datetime, ctx)
+            
+            target_codes = core.select_targets(dt_datetime, filter_ctx)
                 
             if target_codes:
-                target_pct = 1.0 / self.p.slots
+                # 第一遍：收集所有潜在候选标的的实时技术指标
+                potential_codes = []
                 for code in target_codes:
-                    if position_count >= self.p.slots: break
-                    
                     if (code in self.trade_costs or 
                         code in sold_today or 
                         code in self.to_sell_queue or 
@@ -184,34 +186,40 @@ class KSPStrategy(bt.Strategy):
                         
                     # 计算量比 (当日成交量 / 过去 5 日平均成交量)
                     vol_window = 5
+                    vol_ratio = 1.0
                     if len(data) > vol_window:
                         vols = data.volume.get(ago=0, size=vol_window + 1)
-                        avg_vol = np.mean(vols[1:]) # 过去 5 天
-                        curr_vol = vols[0]
-                        vol_ratio = curr_vol / avg_vol if avg_vol > 0 else 1.0
-                    else:
-                        vol_ratio = 1.0
+                        avg_vol = np.mean(vols[1:])
+                        vol_ratio = vols[0] / avg_vol if avg_vol > 0 else 1.0
+                    
+                    # 计算 MA20
+                    ma_window = 20
+                    ma20 = None
+                    if len(data) >= ma_window:
+                        closes = data.close.get(ago=0, size=ma_window)
+                        ma20 = np.mean(closes)
 
-                    context = {
-                        'rank_map': rank_map, 
-                        'rank_5d_map': rank_5d_map,
-                        'rank_10d_map': rank_10d_map,
-                        'rank_5d': rank_5d_map.get(code),
-                        'rank_10d': rank_10d_map.get(code),
-                        'ksp_sum_5d_rank': rank_5d_map.get(code),
-                        'ksp_sum_10d_rank': rank_10d_map.get(code),
-                        'poc': data.poc[0] if hasattr(data, 'poc') else None,
-                        'open': data.open[0], 
+                    # 放入 stock_data_map
+                    filter_ctx['stock_data_map'][code] = {
+                        'open': data.open[0],
                         'high': data.high[0],
                         'low': data.low[0],
                         'close': data.close[0],
+                        'poc': data.poc[0] if hasattr(data, 'poc') else None,
                         'vol_ratio': vol_ratio,
-                        'rank': rank_map.get(code)
+                        'ma_20': ma20
                     }
+                    potential_codes.append(code)
+
+                # 第二步：调用核心逻辑进行统一过滤与优先级排序
+                passed_candidates = core.filter_candidates(potential_codes, dt_datetime, filter_ctx)
+                
+                # 第三步：按顺序下单
+                target_pct = 1.0 / self.p.slots
+                for code in passed_candidates:
+                    if position_count >= self.p.slots: break
                     
-                    if not core.filter_candidates([code], dt_datetime, context):
-                        continue
-                    
+                    data = self._get_data(code)
                     # 使用市价单 (Market)，在次日开盘时直接成交
                     self.order_target_percent(data=data, target=target_pct, exectype=bt.Order.Market)
                     position_count += 1

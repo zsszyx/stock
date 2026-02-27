@@ -111,6 +111,31 @@ class VolumeRatioEntryRule(EntryRule):
             return vol_ratio >= self.threshold
         return False
 
+class MovingAverageBiasRule(EntryRule):
+    """
+    基于均线乖离率的准入规则 (控制回踩/不追高)
+    Bias = (Price - MA) / MA
+    """
+    def __init__(self, window: int = 20, max_bias: float = 0.05, min_bias: float = -0.03):
+        super().__init__(f"MA{window}_Bias_{min_bias:.1%}_to_{max_bias:.1%}")
+        self.window = window
+        self.max_bias = max_bias
+        self.min_bias = min_bias
+
+    def check(self, code: str, date: datetime, context: Dict[str, Any]) -> bool:
+        bias = context.get(f'bias_{self.window}')
+        
+        # 如果 context 中没有预计算好的 bias，规则尝试自行计算 (需要 context 中有 ma 数据)
+        if bias is None:
+            ma = context.get(f'ma_{self.window}')
+            close = context.get('close')
+            if ma and close and ma > 0:
+                bias = (close - ma) / ma
+        
+        if bias is not None and not np.isnan(bias):
+            return self.min_bias <= bias <= self.max_bias
+        return False
+
 class MomentumEntryRule(EntryRule):
     """
     基于动能趋势的准入规则 (r5 < r10)

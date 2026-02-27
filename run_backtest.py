@@ -30,6 +30,7 @@ from stock.backtest.data_factory import BTDataFeedFactory
 from stock.strategy.modular_core import ModularKSPCore
 from stock.strategy.rules import (
     RankEntryRule, RangeRankEntryRule, VolatilityConvergenceRule, VolumeRatioEntryRule,
+    MovingAverageBiasRule,
     StopLossRule, TakeProfitRule, RankExitRule, BottomRankExitRule
 )
 from stock.backtest.reporting.trade_reporter import generate_trading_report
@@ -151,7 +152,7 @@ def run_backtest(args):
         dummy_df = pd.DataFrame(index=full_idx, data={'close': 1.0})
         cerebro.adddata(bt.feeds.PandasData(dataname=dummy_df, name='_master_clock_', plot=False))
 
-    # 配置买入准入规则：区间排名 + 波动收敛 + 量比突破
+    # 配置买入准入规则：区间排名 + 波动收敛 + 量比突破 + 均线乖离
     entry_rules = [
         RangeRankEntryRule(
             rank_col=f'ksp_sum_{args.ksp_period}d_rank', 
@@ -159,7 +160,8 @@ def run_backtest(args):
             max_rank=args.entry_rank
         ),
         VolatilityConvergenceRule(threshold=args.max_amp),
-        VolumeRatioEntryRule(threshold=args.min_vol_ratio, window=5)
+        VolumeRatioEntryRule(threshold=args.min_vol_ratio, window=5),
+        MovingAverageBiasRule(window=20, min_bias=args.min_bias, max_bias=args.max_bias)
     ]
     
     # 配置卖出退出规则：排名劣化 (跌出 sell_rank) + 尾部风控 (D9-D10)
@@ -265,6 +267,8 @@ if __name__ == "__main__":
     parser.add_argument("--entry_rank", type=int, default=1300, help="买入排名最大门槛 (D2-D3范围)")
     parser.add_argument("--max_amp", type=float, default=0.03, help="准入最大振幅限制 (波动收敛)")
     parser.add_argument("--min_vol_ratio", type=float, default=1.5, help="买入最小量比门槛 (U型启动)")
+    parser.add_argument("--max_bias", type=float, default=0.05, help="最大均线乖离率 (不追高)")
+    parser.add_argument("--min_bias", type=float, default=-0.03, help="最小均线乖离率 (回踩支撑)")
     parser.add_argument("--sell_rank", type=int, default=1500, help="卖出排名劣化门槛")
     parser.add_argument("--tail_threshold", type=int, default=3500, help="尾部退出排名门槛 (D9-D10)")
     parser.add_argument("--concept_min_rank", type=int, default=20, help="概念筛选起始排名 (避开极度过热)")

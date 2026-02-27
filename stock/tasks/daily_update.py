@@ -18,8 +18,8 @@ class DailyAggregationTask(BaseTask):
     def run(self, start_date: str, end_date: str, clear_target: bool = False):
         self.log_progress(f"🚀 开始聚合任务: {start_date} -> {end_date} (清理目标={clear_target})")
         
-        if clear_target:
-            self.repo.execute(f"ALTER TABLE {settings.TABLE_DAILY} DELETE WHERE date >= '{start_date}' AND date <= '{end_date}'")
+        # ReplacingMergeTree naturally handles duplicates on (code, date). 
+        # Manual DELETE is risky due to asynchronicity.
         
         # 1. 获取分钟线表中存在的日期
         query_dates = f"SELECT DISTINCT date FROM {settings.TABLE_MIN5} WHERE date >= '{start_date}' AND date <= '{end_date}' ORDER BY date ASC"
