@@ -1,8 +1,8 @@
 <clickhouse>
     <logger>
         <level>trace</level>
-        <log>/Users/zsy/stock/stock/logs/clickhouse-server.log</log>
-        <errorlog>/Users/zsy/stock/stock/logs/clickhouse-server.err.log</errorlog>
+        <log>/Users/zsy/ksp/logs/clickhouse-server.log</log>
+        <errorlog>/Users/zsy/ksp/logs/clickhouse-server.err.log</errorlog>
         <size>1000M</size>
         <count>10</count>
     </logger>
@@ -16,11 +16,11 @@
     <max_concurrent_queries>100</max_concurrent_queries>
     <uncompressed_cache_size>8589934592</uncompressed_cache_size>
     <mark_cache_size>5368709120</mark_cache_size>
-    <path>/Users/zsy/stock/stock/ch_data/</path>
-    <tmp_path>/Users/zsy/stock/stock/ch_data/tmp/</tmp_path>
+    <path>/Users/zsy/ksp/ch_data/</path>
+    <tmp_path>/Users/zsy/ksp/ch_data/tmp/</tmp_path>
     <user_directories>
         <users_xml>
-            <path>/Users/zsy/stock/stock/configs/clickhouse/users.xml</path>
+            <path>/Users/zsy/ksp/configs/clickhouse/users.xml</path>
         </users_xml>
     </user_directories>
     <default_database>default</default_database>

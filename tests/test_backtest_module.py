@@ -11,9 +11,10 @@
 import unittest
 import sys
 import os
+from pathlib import Path
 
 # 添加项目路径
-sys.path.insert(0, '/Users/zsy/stock/stock')
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 class TestDataLoader(unittest.TestCase):
     """数据加载器测试"""
@@ -92,10 +93,10 @@ class TestBacktestEngine(unittest.TestCase):
     def test_take_profit_logic(self):
         """测试止盈逻辑"""
         entry_price = 10.0
-        take_profit = 0.10  # +10%
+        take_profit = 0.099  # +9.9%
         
         target_price = entry_price * (1 + take_profit)
-        self.assertAlmostEqual(target_price, 11.00, places=2)
+        self.assertAlmostEqual(target_price, 10.99, places=2)
 
 
 class TestAnalyzer(unittest.TestCase):

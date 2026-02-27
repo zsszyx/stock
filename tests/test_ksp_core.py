@@ -10,7 +10,7 @@ class TestKSPCore(unittest.TestCase):
             selector_obj=self.mock_selector,
             slots=2,
             sell_rank=100,
-            take_profit=0.10,
+            take_profit=0.099,
             stop_loss=-0.05
         )
         self.test_date = datetime(2025, 1, 1)
@@ -26,8 +26,8 @@ class TestKSPCore(unittest.TestCase):
         self.assertIn("stop_loss", reason)
 
     def test_should_exit_take_profit(self):
-        # 成本 100，现价 111 (涨 11%)，触发 10% 止盈
-        reason = self.strategy.should_exit('SH600000', 100.0, 111.0, self.test_date, {})
+        # 成本 100，现价 110 (涨 10%)，触发 9.9% 止盈
+        reason = self.strategy.should_exit('SH600000', 100.0, 110.0, self.test_date, {})
         self.assertTrue(reason is not None)
         self.assertIn("take_profit", reason)
 
