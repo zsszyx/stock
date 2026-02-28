@@ -148,9 +148,6 @@ def run_backtest(args):
     all_dates = sorted(daily_df['date'].unique())
     full_idx = pd.to_datetime(all_dates)
     
-    # 策略正式开始运行的日期对象
-    start_dt = datetime.strptime(start_date, '%Y-%m-%d')
-    
     if not benchmark_df.empty:
         # 基准数据也需要对齐到 full_idx
         cerebro.adddata(BTDataFeedFactory.create_benchmark_feed(benchmark_df, full_idx))

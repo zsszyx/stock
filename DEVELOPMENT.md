@@ -38,6 +38,13 @@ KSP 策略利用高阶统计量指标捕捉市场动能异动。核心在于通�
 ### 1.1 架构设计图
 `数据源 (BaoStock)` -> `分钟线表 (mintues5)` -> `日线表 (daily_kline)` -> `Funnel 选股器` -> `Modular 策略引擎` -> `Backtrader 执行框架`。
 
+<a name="12-技术栈"></a>
+### 1.2 技术栈
+*   **数据库**: ClickHouse (处理海量金融时序数据的高效 OLAP)
+*   **数据处理**: Pandas, NumPy
+*   **回测引擎**: Backtrader
+*   **统计验证**: SciPy (Spearman 秩相关系数用于 IC 分析)
+
 ---
 
 <a name="2-数据库与数据模块开发"></a>
@@ -46,12 +53,32 @@ KSP 策略利用高阶统计量指标捕捉市场动能异动。核心在于通�
 <a name="21-clickhouse-表结构与维护"></a>
 ### 2.1 ClickHouse 表结构与维护
 *   **存储引擎**: `ReplacingMergeTree` 引擎天然支持基于 `(code, date)` 的覆盖更新。
+*   **维护注意**: 禁止在任务流中使用异步 `DELETE`。直接 `INSERT` 即可，随后调用 `optimize_table` 强制合并。
 *   **新增字段**: `is_listed_180` (Int32)，用于快速判断个股是否满足 180 天上市门槛。
 
 <a name="22-数据上下文"></a>
 ### 2.2 数据上下文
 *   **`ConceptContext` (v2)**: 类级别缓存，提供概念与成分股的高效双向映射。
-*   **`DailyContext`**: 核心聚合引擎，负责 POC (Point of Control) 的计算。
+*   **`DailyContext`**: 核心聚合引擎，负责 OHLC 聚合及 POC (Point of Control) 的计算。
+
+---
+
+<a name="3-数据流水线任务"></a>
+## 3. 数据流水线任务
+
+数据更新是一个严格的串行流程，由 `scripts/full_daily_update.py` 统筹。
+
+### 3.1 `Min5UpdateTask`
+*   **职责**: 多进程抓取原始分钟线数据。
+*   **注意**: 必须在 BaoStock 收盘后运行，若获取列表失败，检查网络连接。
+
+### 3.2 `DailyAggregationTask`
+*   **职责**: 分钟线聚合为日线基础数据。
+*   **注意**: 处理冷启动问题时需清理目标时间段。
+
+### 3.3 `RefreshFactorsTask`
+*   **职责**: 计算全局截面排名。
+*   **注意**: 必须强制转换排名列为 `Int32`，防止 ClickHouse 插入类型报错。
 
 ---
 
@@ -92,7 +119,8 @@ KSP 策略利用高阶统计量指标捕捉市场动能异动。核心在于通�
 <a name="51-backtrader-适配器"></a>
 ### 5.1 Backtrader 适配器 (`stock/backtest/ksp_strategy.py`)
 *   **执行方式**: **次日开盘价成交 (Market at Open)**。
-*   **重要修复**: 重构了买入逻辑，先统一收集所有候选股指标，再进行**统一排序过滤**，解决了代码顺序买入导致的优先级失效问题。
+*   **数据预热**: 系统通过 `start_date` 参数支持数据预热期。在预热期间（如正式回测前 120 天），策略仅更新技术指标，不产生交易决策。这确保了 MA20、量比等指标在回测开始的第一天就是成熟的。
+*   **重要修复**: 重构了买入逻辑，先统一收集所有候选股指标，再进行**统一排序过滤**，解决了优先级失效问题。
 *   **机制**: 每日 `next` 开始前强制**撤销所有未成交买单**。
 
 ---
@@ -102,13 +130,11 @@ KSP 策略利用高阶统计量指标捕捉市场动能异动。核心在于通�
 *   `scripts/full_daily_update.py`: 一键同步数据并计算因子。
 *   `scripts/latest_trading_plan.py`: 基于最新截面生成每日实盘计划。
 *   `scripts/analyze_ksp_comprehensive.py`: 因子 IC 与分组收益分析。
+*   `scripts/backfill_data.py`: 历史数据长周期补录脚本。
 
 ---
 
-<a name="7-性能分析参考"></a>
-## 7. 性能分析参考 (2025 全量回测)
-*   **版本**: `KSP_Final_Fixed_V2`
-*   **胜率**: **53.12%**
-*   **累计收益**: **+29.74%**
-*   **最大回撤**: **16.53%**（开盘买入模式下的波动）
-*   **平均持股**: 6.51 天
+<a name="7-数据健康与异常处理"></a>
+## 7. 数据健康与异常处理 (`stock/utils/health_check.py`)
+*   **检查项**: 数据库最新日期滞后性、KSP 因子覆盖率、POC 完整性。
+*   **机制**: 在回测启动前强制运行自检，异常则 Fail-Fast。

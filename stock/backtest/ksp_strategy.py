@@ -28,6 +28,10 @@ class KSPStrategy(bt.Strategy):
         # 确定排名列名
         self.rank_attr = f'ksp_sum_{self.p.ksp_period}d_rank'
         
+        # 确保 start_date 是字符串
+        if self.p.start_date and not isinstance(self.p.start_date, str):
+            self.p.start_date = self.p.start_date.strftime('%Y-%m-%d')
+        
         if self.p.core_strategy is None:
             raise ValueError("Must provide 'core_strategy' parameter (instance of BaseStrategy)")
 
@@ -100,7 +104,7 @@ class KSPStrategy(bt.Strategy):
                     rank_map[d._name] = getattr(d.lines, self.rank_attr)[0]
                     rank_5d_map[d._name] = d.lines.ksp_sum_5d_rank[0]
                     rank_10d_map[d._name] = d.lines.ksp_sum_10d_rank[0]
-            except Exception:
+            except (AttributeError, IndexError):
                 continue
 
         sold_today = set() 
@@ -266,5 +270,5 @@ class KSPStrategy(bt.Strategy):
         try:
             with open(self.p.log_file, 'w', encoding='utf-8') as f:
                 json.dump(log_data, f, ensure_ascii=False, indent=2)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"❌ 保存日志失败: {e}")
