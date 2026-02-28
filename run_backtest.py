@@ -143,10 +143,16 @@ def run_backtest(args):
     cerebro = bt.Cerebro()
     cerebro.broker.setcash(cash)
     cerebro.broker.setcommission(commission=0.0005)
+    # 修改 full_idx 为包含预热期的完整时间轴
+    # 这样 Backtrader 的指标 (如 MA20) 在 start_date 当天就已经计算完成了
     all_dates = sorted(daily_df['date'].unique())
     full_idx = pd.to_datetime(all_dates)
     
+    # 策略正式开始运行的日期对象
+    start_dt = datetime.strptime(start_date, '%Y-%m-%d')
+    
     if not benchmark_df.empty:
+        # 基准数据也需要对齐到 full_idx
         cerebro.adddata(BTDataFeedFactory.create_benchmark_feed(benchmark_df, full_idx))
     else:
         dummy_df = pd.DataFrame(index=full_idx, data={'close': 1.0})
@@ -209,7 +215,14 @@ def run_backtest(args):
         feed = BTDataFeedFactory.create_stock_feed(code_df, code, full_idx)
         if feed is not None: cerebro.adddata(feed)
     
-    cerebro.addstrategy(KSPStrategy, core_strategy=core_strategy, slots=slots, ksp_period=args.ksp_period, log_file=filenames['log'])
+    cerebro.addstrategy(
+        KSPStrategy, 
+        core_strategy=core_strategy, 
+        slots=slots, 
+        ksp_period=args.ksp_period, 
+        start_date=args.start, # 传入正式开始日期
+        log_file=filenames['log']
+    )
 
     cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name='trades')
     cerebro.addanalyzer(bt.analyzers.DrawDown, _name='drawdown')
