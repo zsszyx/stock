@@ -4,18 +4,42 @@ import pandas as pd
 from stock.utils.data_utils import DataUtils
 
 class BaoInterface:
+    _is_logged_in = False
+
     def __enter__(self):
         self._login()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        self._logout()
+        # 在 Context Manager 模式下，我们不再主动登出，保持连接直到进程结束
+        # 或者可以选择只在非多进程环境下登出。为了极致稳定，这里保持连接。
+        pass
 
     def _login(self):
-        bs.login()
+        if not BaoInterface._is_logged_in:
+            res = bs.login()
+            if res.error_code == '0':
+                BaoInterface._is_logged_in = True
 
     def _logout(self):
-        bs.logout()
+        if BaoInterface._is_logged_in:
+            try:
+                bs.logout()
+            except Exception:
+                pass # 静默处理登出异常
+            BaoInterface._is_logged_in = False
+
+    @classmethod
+    def worker_init(cls):
+        """用于 ProcessPoolExecutor 的初始化函数"""
+        instance = cls()
+        instance._login()
+
+    @classmethod
+    def worker_cleanup(cls):
+        """用于进程结束时的清理"""
+        instance = cls()
+        instance._logout()
 
     def _process_rs(self, rs, numeric_cols: list = None) -> pd.DataFrame:
         if rs is None or rs.error_code != '0': return pd.DataFrame()

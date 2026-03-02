@@ -8,22 +8,11 @@ from stock.database.factory import RepositoryFactory
 from stock.data_fetch.data_provider.baostock_provider import BaoInterface
 from stock.config import settings
 
-# Global instance for worker processes
-worker_bi = None
-
-def init_worker():
-    """Initialize the BaoInterface in the worker process."""
-    global worker_bi
-    worker_bi = BaoInterface()
-    worker_bi._login()
-
 def fetch_data_task(code, start_date, end_date, adjustflag='3'):
     """Module-level task function for multiprocessing."""
-    global worker_bi
     try:
-        if worker_bi is None:
-            init_worker()
-        return worker_bi.get_k_data_5min(code=code, start_date=start_date, end_date=end_date, adjustflag=adjustflag)
+        bi = BaoInterface()
+        return bi.get_k_data_5min(code=code, start_date=start_date, end_date=end_date, adjustflag=adjustflag)
     except Exception:
         return None
 
@@ -63,7 +52,7 @@ class Min5UpdateTask(BaseTask):
             all_codes = stock_list['code'].tolist()
             self.log_progress(f"Total stocks in scope: {len(all_codes)}")
 
-        with ProcessPoolExecutor(max_workers=self.max_workers, initializer=init_worker) as executor:
+        with ProcessPoolExecutor(max_workers=self.max_workers, initializer=BaoInterface.worker_init) as executor:
             with tqdm(total=len(all_codes), desc="Updating Min5") as pbar:
                 for i in range(0, len(all_codes), self.batch_size):
                     batch_codes = all_codes[i:i+self.batch_size]

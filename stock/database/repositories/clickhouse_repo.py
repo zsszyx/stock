@@ -133,7 +133,26 @@ class ClickHouseRepository(BaseRepository):
     def create_daily_kline_table(self):
         query = f"""
         CREATE TABLE IF NOT EXISTS {settings.TABLE_DAILY} (
-            date String, code String, open Float64, high Float64, low Float64, close Float64, volume Int64, amount Float64, real_price Float64, skew Float64, kurt Float64, poc Float64, morning_mean Float64, afternoon_mean Float64, min_time String, ksp_score Float64, ksp_sum_14d Float64, ksp_sum_10d Float64, ksp_sum_7d Float64, ksp_sum_5d Float64, ksp_rank Int32, ksp_sum_14d_rank Int32, ksp_sum_10d_rank Int32, ksp_sum_7d_rank Int32, ksp_sum_5d_rank Int32, list_days Int32, pct_chg_skew_22d Float64, pct_chg_kurt_10d Float64, net_mf Float64, net_mf_5d Float64, net_mf_10d Float64, net_mf_20d Float64, ret_5d Float64, ret_10d Float64, ret_20d Float64, turn Float64
+            date String, code String, open Float64, high Float64, low Float64, close Float64, volume Int64, amount Float64, real_price Float64, skew Float64, kurt Float64, poc Float64, morning_mean Float64, afternoon_mean Float64, min_time String, ksp_score Float64, ksp_sum_14d Float64, ksp_sum_10d Float64, ksp_sum_7d Float64, ksp_sum_5d Float64, ksp_rank Int32, ksp_sum_14d_rank Int32, ksp_sum_10d_rank Int32, ksp_sum_7d_rank Int32, ksp_sum_5d_rank Int32, list_days Int32, is_listed_180 Int32, pct_chg_skew_22d Float64, pct_chg_kurt_10d Float64, net_mf Float64, net_mf_5d Float64, net_mf_10d Float64, net_mf_20d Float64, ret_5d Float64, ret_10d Float64, ret_20d Float64, turn Float64
+        ) ENGINE = ReplacingMergeTree() ORDER BY (code, date)
+        """
+        self.execute(query)
+
+    def create_normal_daily_table(self):
+        query = f"""
+        CREATE TABLE IF NOT EXISTS {settings.TABLE_NORMAL_DAILY} (
+            date String,
+            code String,
+            open Float64,
+            high Float64,
+            low Float64,
+            close Float64,
+            volume Int64,
+            amount Float64,
+            turn Float64,
+            mktcap Float64,
+            mktcap_rank Int32,
+            mktcap_pct Float64
         ) ENGINE = ReplacingMergeTree() ORDER BY (code, date)
         """
         self.execute(query)

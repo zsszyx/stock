@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     # Table Names
     TABLE_MIN5: str = "mintues5"
     TABLE_DAILY: str = "daily_kline"
+    TABLE_NORMAL_DAILY: str = "normal_daily_kline"
     TABLE_STOCK_LIST: str = "stock_list"
     TABLE_TRADE_DATE: str = "trade_date"
     TABLE_CONCEPT_THS: str = "concept_ths"
